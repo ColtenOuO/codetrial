@@ -78,7 +78,7 @@
     "starterCode": {
       "python": "class Solution:\n    def twoSum(self, nums: list[int], target: int) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
       "javascript": "/**\n * @param {number[]} nums\n * @param {number} target\n * @return {number[]}\n */\nfunction twoSum(nums, target) {\n  // Think out loud as you go!\n}\n",
-      "c": "int* twoSum(int* nums, int numsSize, int target, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+      "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* twoSum(int* nums, int numsSize, int target, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<int> twoSum(vector<int>& nums, int target) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public int[] twoSum(int[] nums, int target) {\n        // Think out loud as you go!\n        return new int[]{};\n    }\n}\n"
     }
@@ -546,7 +546,7 @@
     "starterCode": {
       "python": "class Solution:\n    def productExceptSelf(self, nums: list[int]) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
       "javascript": "/**\n * @param {number[]} nums\n * @return {number[]}\n */\nfunction productExceptSelf(nums) {\n  // Think out loud as you go!\n}\n",
-      "c": "int* productExceptSelf(int* nums, int numsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+      "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* productExceptSelf(int* nums, int numsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<int> productExceptSelf(vector<int>& nums) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public int[] productExceptSelf(int[] nums) {\n        // Think out loud as you go!\n        return new int[]{};\n    }\n}\n"
     }
@@ -4045,7 +4045,7 @@
     "starterCode": {
       "python": "class Solution:\n    def merge(self, intervals: list[list[int]]) -> list[list[int]]:\n        # Think out loud as you go!\n        pass\n",
       "javascript": "/**\n * @param {number[][]} intervals\n * @return {number[][]}\n */\nfunction merge(intervals) {\n  // Think out loud as you go!\n}\n",
-      "c": "int** merge(int** intervals, int intervalsSize, int* intervalsColSize, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
+      "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** merge(int** intervals, int intervalsSize, int* intervalsColSize, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<vector<int>> merge(vector<vector<int>>& intervals) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public int[][] merge(int[][] intervals) {\n        // Think out loud as you go!\n        return new int[][]{};\n    }\n}\n"
     }
@@ -4160,7 +4160,7 @@
     "starterCode": {
       "python": "class Solution:\n    def plusOne(self, digits: list[int]) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
       "javascript": "/**\n * @param {number[]} digits\n * @return {number[]}\n */\nfunction plusOne(digits) {\n  // Think out loud as you go!\n}\n",
-      "c": "int* plusOne(int* digits, int digitsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+      "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* plusOne(int* digits, int digitsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
       "cpp": "class Solution {\npublic:\n    vector<int> plusOne(vector<int>& digits) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
       "java": "class Solution {\n    public int[] plusOne(int[] digits) {\n        // Think out loud as you go!\n        return new int[0];\n    }\n}\n"
     }

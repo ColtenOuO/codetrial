@@ -16,7 +16,7 @@
   "starterCode": {
     "python": "class Solution:\n    def matchDisputedCharge(self, nums: list[int], target: int) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
     "javascript": "/**\n * @param {number[]} nums\n * @param {number} target\n * @return {number[]}\n */\nfunction matchDisputedCharge(nums, target) {\n  // Think out loud as you go!\n}\n",
-    "c": "int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+    "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
     "cpp": "class Solution {\npublic:\n    vector<int> matchDisputedCharge(vector<int>& nums, int target) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
     "java": "class Solution {\n    public int[] matchDisputedCharge(int[] nums, int target) {\n        // Think out loud as you go!\n        return new int[]{};\n    }\n}\n"
   },

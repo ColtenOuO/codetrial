@@ -16,7 +16,7 @@
   "starterCode": {
     "python": "class Solution:\n    def consolidateWindows(self, intervals: list[list[int]]) -> list[list[int]]:\n        # Think out loud as you go!\n        pass\n",
     "javascript": "/**\n * @param {number[][]} intervals\n * @return {number[][]}\n */\nfunction consolidateWindows(intervals) {\n  // Think out loud as you go!\n}\n",
-    "c": "int** consolidateWindows(int** intervals, int intervalsSize, int* intervalsColSize, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
+    "c": "/**\n * Return an array of arrays of size *returnSize.\n * The sizes of the arrays are returned as *returnColumnSizes array.\n * Note: Both returned array and *columnSizes array must be malloced, assume caller calls free().\n */\nint** consolidateWindows(int** intervals, int intervalsSize, int* intervalsColSize, int* returnSize, int** returnColumnSizes) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    *returnColumnSizes = NULL;\n    return NULL;\n}\n",
     "cpp": "class Solution {\npublic:\n    vector<vector<int>> consolidateWindows(vector<vector<int>>& intervals) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
     "java": "class Solution {\n    public int[][] consolidateWindows(int[][] intervals) {\n        // Think out loud as you go!\n        return new int[][]{};\n    }\n}\n"
   },

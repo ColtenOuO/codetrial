@@ -16,7 +16,7 @@
   "starterCode": {
     "python": "class Solution:\n    def gainWithoutStage(self, nums: list[int]) -> list[int]:\n        # Think out loud as you go!\n        pass\n",
     "javascript": "/**\n * @param {number[]} nums\n * @return {number[]}\n */\nfunction gainWithoutStage(nums) {\n  // Think out loud as you go!\n}\n",
-    "c": "int* gainWithoutStage(int* nums, int numsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
+    "c": "/**\n * Note: The returned array must be malloced, assume caller calls free().\n */\nint* gainWithoutStage(int* nums, int numsSize, int* returnSize) {\n    // Think out loud as you go!\n    *returnSize = 0;\n    return NULL;\n}\n",
     "cpp": "class Solution {\npublic:\n    vector<int> gainWithoutStage(vector<int>& nums) {\n        // Think out loud as you go!\n        return {};\n    }\n};\n",
     "java": "class Solution {\n    public int[] gainWithoutStage(int[] nums) {\n        // Think out loud as you go!\n        return new int[]{};\n    }\n}\n"
   },
