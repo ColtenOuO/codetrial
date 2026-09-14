@@ -4,7 +4,7 @@
   "checker": "exact",
   "cases": [
     {
-      "label": "positive palindrome",
+      "label": "positive mirrored number",
       "input": [
         121
       ],
@@ -32,7 +32,7 @@
       "expected": true
     },
     {
-      "label": "even length palindrome",
+      "label": "even length mirrored",
       "input": [
         1221
       ],

@@ -4,7 +4,7 @@
   "checker": "exact",
   "cases": [
     {
-      "label": "example board four moves",
+      "label": "mixed portals four turns",
       "input": [
         [
           [
@@ -60,7 +60,7 @@
       "expected": 4
     },
     {
-      "label": "ladder reaches finish",
+      "label": "portal reaches finish",
       "input": [
         [
           [

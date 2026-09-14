@@ -48,7 +48,7 @@
       "expected": 2
     },
     {
-      "label": "large coin ignored",
+      "label": "large token ignored",
       "input": [
         [
           5,

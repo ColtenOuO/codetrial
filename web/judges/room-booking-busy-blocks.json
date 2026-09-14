@@ -78,7 +78,7 @@
       ]
     },
     {
-      "label": "insert before all",
+      "label": "new block before all",
       "input": [
         [
           [
@@ -103,7 +103,7 @@
       ]
     },
     {
-      "label": "insert after all",
+      "label": "new block after all",
       "input": [
         [
           [

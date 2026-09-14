@@ -4,35 +4,35 @@
   "checker": "exact",
   "cases": [
     {
-      "label": "two steps",
+      "label": "two slots",
       "input": [
         2
       ],
       "expected": 2
     },
     {
-      "label": "three steps",
+      "label": "three slots",
       "input": [
         3
       ],
       "expected": 3
     },
     {
-      "label": "one step",
+      "label": "one slot",
       "input": [
         1
       ],
       "expected": 1
     },
     {
-      "label": "four steps",
+      "label": "four slots",
       "input": [
         4
       ],
       "expected": 5
     },
     {
-      "label": "larger staircase",
+      "label": "longer rail",
       "input": [
         10
       ],

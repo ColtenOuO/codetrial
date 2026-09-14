@@ -4,7 +4,7 @@
   "checker": "exact",
   "cases": [
     {
-      "label": "single prerequisite",
+      "label": "single requirement",
       "input": [
         2,
         [
@@ -17,7 +17,7 @@
       "expected": true
     },
     {
-      "label": "two course cycle",
+      "label": "two module loop",
       "input": [
         2,
         [
@@ -34,7 +34,7 @@
       "expected": false
     },
     {
-      "label": "disconnected courses",
+      "label": "disconnected modules",
       "input": [
         5,
         [
@@ -55,7 +55,7 @@
       "expected": true
     },
     {
-      "label": "long cycle",
+      "label": "long loop",
       "input": [
         4,
         [

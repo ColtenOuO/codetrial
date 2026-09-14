@@ -4,7 +4,7 @@
   "checker": "exact",
   "cases": [
     {
-      "label": "one big island",
+      "label": "one big region",
       "input": [
         [
           [
@@ -40,7 +40,7 @@
       "expected": 1
     },
     {
-      "label": "three islands",
+      "label": "three regions",
       "input": [
         [
           [
@@ -76,7 +76,7 @@
       "expected": 3
     },
     {
-      "label": "single land cell",
+      "label": "single copper cell",
       "input": [
         [
           [
@@ -87,7 +87,7 @@
       "expected": 1
     },
     {
-      "label": "all water",
+      "label": "all bare board",
       "input": [
         [
           [

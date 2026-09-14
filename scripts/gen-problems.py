@@ -200,6 +200,10 @@ def request_json(url: str, *, body: object | None = None) -> object:
         raise RuntimeError(f"{url} returned {error.code}") from error
 
 
+def repeated(items: list) -> list:
+    return sorted({item for item in items if items.count(item) > 1})
+
+
 def check_plan_slugs(slugs: list[str]) -> None:
     """What any copy of the study plan has to satisfy to be usable here.
 
@@ -210,8 +214,7 @@ def check_plan_slugs(slugs: list[str]) -> None:
     """
     unique = set(slugs)
     if len(unique) != len(slugs):
-        repeated = sorted({slug for slug in slugs if slugs.count(slug) > 1})
-        raise RuntimeError(f"duplicate slugs in the plan: {repeated}")
+        raise RuntimeError(f"duplicate slugs in the plan: {repeated(slugs)}")
     bank = {problem["id"] for problem in read_json(SOURCE)}
     if unique != bank:
         raise RuntimeError(
@@ -581,9 +584,12 @@ def names_source(title: str, text: str) -> bool:
     brief that says "merge intervals" names the problem whatever the parameter
     is called.
     """
-    if title.isalpha():
-        return False
-    target = camel_words(title)
+    return not title.isalpha() and spells(title, text)
+
+
+def spells(name: str, text: str) -> bool:
+    """Whether a run of consecutive words in text joins into name."""
+    target = camel_words(name)
     words = spelled_words(text)
     for start in range(len(words)):
         joined = ""
@@ -707,17 +713,30 @@ def text_list(
 # case came from, or which approach it defeats, is read by the candidate the
 # moment they press Run.
 REVEALING_LABEL = re.compile(
-    r"leetcode|sample|greedy|dynamic|\bheap|pointer|binary search|prefix sum|\bxor\b",
+    r"leetcode|sample|\bexample|greedy|dynamic|\bheap|pointer|binary search|prefix sum|\bxor\b",
     re.IGNORECASE,
 )
 
 
 def check_labels(problem_id: str, judge: dict) -> None:
-    for case in judge["cases"]:
-        if REVEALING_LABEL.search(case["label"]):
-            raise RuntimeError(
-                f"{problem_id}: case label {case['label']!r} gives it away"
-            )
+    """The labels as they ship, against the judge's published names.
+
+    Checked after renames, so a rename cannot make two labels the same or turn
+    one into a word that gives the case away.
+    """
+    # Two cases under one label are one row twice in the results panel, and a
+    # report cannot say which of them failed.
+    labels = [case["label"] for case in judge["cases"]]
+    if duplicates := repeated(labels):
+        raise RuntimeError(f"{problem_id}: case labels repeat: {duplicates}")
+    # The published entry point is refused rather than renamed: it is often a
+    # plain verb, "rotate by three", and the new name would not read as one.
+    published = [name for name in (judge.get("entry"), judge.get("className")) if name]
+    for label in labels:
+        if REVEALING_LABEL.search(label) or any(
+            spells(name, label) for name in published
+        ):
+            raise RuntimeError(f"{problem_id}: case label {label!r} gives it away")
 
 
 def posed(problem: dict, judge: dict, variant: dict) -> tuple[dict, dict]:
@@ -727,7 +746,11 @@ def posed(problem: dict, judge: dict, variant: dict) -> tuple[dict, dict]:
     entry needs no hand edits; the rename is declared once in the variant and
     applied here to everything that ships or reaches the interviewer.
     """
-    renames = {**variant.get("terms", {}), **variant.get("parameters", {})}
+    # Printed beside OK or FAIL, so a label written against a published
+    # parameter, "magazine too short", says it to the candidate on every run. The
+    # entry point is not renamed there; check_labels refuses it instead.
+    worded = {**variant.get("terms", {}), **variant.get("parameters", {})}
+    renames = dict(worded)
     if "entry" in variant:
         renames[judge["entry"]] = variant["entry"]
     # C passes an array with its length beside it, `pointsSize` and
@@ -747,7 +770,20 @@ def posed(problem: dict, judge: dict, variant: dict) -> tuple[dict, dict]:
             text = re.sub(rf"\b{re.escape(old)}(?=[A-Z])", new, text)
         return text
 
-    judge = dict(judge)
+    judge = {
+        **judge,
+        "cases": [
+            {
+                **case,
+                "label": re.sub(
+                    r"\b\w+\b",
+                    lambda word: worded.get(word.group(), word.group()),
+                    case["label"],
+                ),
+            }
+            for case in judge["cases"]
+        ],
+    }
     if "entry" in variant:
         judge["entry"] = variant["entry"]
     if "className" in variant:
@@ -826,10 +862,18 @@ def validated_variant(problem: dict, judge: dict, variant: object) -> dict:
         raise RuntimeError(
             f"{problem_id}: a {judge['kind']} problem declares a new {declared}"
         )
+    # Every name a variant gives, entry point, class, parameters and terms, is
+    # held to the same list of names it may not bring back.
+    published_names = {
+        camel_words(name)
+        for name in (problem["title"], judge.get("entry"), judge.get("className"))
+        if name
+    }
     pattern = r"[a-z][A-Za-z0-9]+" if declared == "entry" else r"[A-Z][A-Za-z0-9]+"
-    if not re.fullmatch(pattern, str(variant[declared])) or camel_words(
-        variant[declared]
-    ) in {camel_words(problem["title"]), camel_words(judge[declared])}:
+    if (
+        not re.fullmatch(pattern, str(variant[declared]))
+        or camel_words(variant[declared]) in published_names
+    ):
         raise RuntimeError(
             f"{problem_id}: {declared} {variant[declared]!r} is not a new name"
         )
@@ -849,7 +893,13 @@ def validated_variant(problem: dict, judge: dict, variant: object) -> dict:
         raise RuntimeError(
             f"{problem_id}: terms maps one identifier-like word to another"
         )
+    # A rename into the published entry point would put it back everywhere the
+    # rename reaches, labels included.
+    for target in [*parameters.values(), *terms.values()]:
+        if camel_words(str(target)) in published_names:
+            raise RuntimeError(f"{problem_id}: {target!r} is the published name")
     shipped, graded = posed(problem, judge, variant)
+    check_labels(problem_id, {**judge, "cases": graded["cases"]})
 
     if "leetcode" in json.dumps(variant).lower():
         raise RuntimeError(f"{problem_id}: a variant never names the source site")
@@ -1009,7 +1059,6 @@ def validated_variants(problems: list[dict], judges: dict) -> dict:
     validated = {}
     for problem in problems:
         judge = judges[problem["id"]]
-        check_labels(problem["id"], judge)
         variant = variants[problem["id"]]
         validated[problem["id"]] = {
             **validated_variant(problem, judge, variant),

@@ -4,7 +4,7 @@
   "checker": "exact",
   "cases": [
     {
-      "label": "one mutation",
+      "label": "one base edit",
       "input": [
         "AACCGGTT",
         "AACCGGTA",
@@ -15,7 +15,7 @@
       "expected": 1
     },
     {
-      "label": "two step mutation",
+      "label": "two base edits",
       "input": [
         "AACCGGTT",
         "AAACGGTA",
@@ -28,7 +28,7 @@
       "expected": 2
     },
     {
-      "label": "end missing from bank",
+      "label": "target not approved",
       "input": [
         "AACCGGTT",
         "AACCGGTA",

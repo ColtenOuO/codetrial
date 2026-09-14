@@ -4,7 +4,7 @@
   "checker": "exact",
   "cases": [
     {
-      "label": "classic ladder",
+      "label": "several renames",
       "input": [
         "hit",
         "cog",
@@ -20,7 +20,7 @@
       "expected": 5
     },
     {
-      "label": "end word absent",
+      "label": "desired name not reserved",
       "input": [
         "hit",
         "cog",

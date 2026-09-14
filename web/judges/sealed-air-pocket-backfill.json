@@ -5,7 +5,7 @@
   "outputParam": 0,
   "cases": [
     {
-      "label": "enclosed region flips",
+      "label": "sealed pocket fills",
       "input": [
         [
           [
@@ -77,7 +77,7 @@
       ]
     },
     {
-      "label": "border connected region stays",
+      "label": "edge connected pocket stays",
       "input": [
         [
           [
@@ -116,7 +116,7 @@
       ]
     },
     {
-      "label": "interior island flips",
+      "label": "interior pocket fills",
       "input": [
         [
           [

@@ -4,7 +4,7 @@
   "checker": "exact",
   "cases": [
     {
-      "label": "target in rotated suffix",
+      "label": "target after the wrap",
       "input": [
         [
           4,
@@ -46,7 +46,7 @@
       "expected": -1
     },
     {
-      "label": "not rotated",
+      "label": "not wrapped",
       "input": [
         [
           1,
@@ -59,7 +59,7 @@
       "expected": 2
     },
     {
-      "label": "target in rotated prefix",
+      "label": "target before the wrap",
       "input": [
         [
           6,

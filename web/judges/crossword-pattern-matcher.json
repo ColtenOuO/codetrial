@@ -4,7 +4,7 @@
   "checker": "exact",
   "cases": [
     {
-      "label": "example wildcard searches",
+      "label": "mixed wildcard searches",
       "input": [
         [
           "PatternLexicon",

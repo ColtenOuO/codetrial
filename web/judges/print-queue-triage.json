@@ -9,7 +9,7 @@
   "outputType": "linkedList",
   "cases": [
     {
-      "label": "stable mixed partition",
+      "label": "stable mixed split",
       "input": [
         [
           1,
@@ -45,7 +45,7 @@
       ]
     },
     {
-      "label": "all nodes stay before partition",
+      "label": "all nodes stay before split",
       "input": [
         [
           1,

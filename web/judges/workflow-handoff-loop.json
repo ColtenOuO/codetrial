@@ -9,7 +9,7 @@
   "cyclePosParam": 1,
   "cases": [
     {
-      "label": "cycle begins in middle",
+      "label": "loop begins in middle",
       "input": [
         [
           3,
@@ -22,7 +22,7 @@
       "expected": true
     },
     {
-      "label": "cycle at head",
+      "label": "loop at head",
       "input": [
         [
           1,
@@ -33,7 +33,7 @@
       "expected": true
     },
     {
-      "label": "single node no cycle",
+      "label": "single task no loop",
       "input": [
         [
           1

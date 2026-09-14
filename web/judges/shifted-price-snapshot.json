@@ -4,7 +4,7 @@
   "checker": "exact",
   "cases": [
     {
-      "label": "rotated middle",
+      "label": "wraps in middle",
       "input": [
         [
           3,
@@ -17,7 +17,7 @@
       "expected": 1
     },
     {
-      "label": "rotated with zero",
+      "label": "wraps with zero",
       "input": [
         [
           4,
@@ -32,7 +32,7 @@
       "expected": 0
     },
     {
-      "label": "not rotated",
+      "label": "not wrapped",
       "input": [
         [
           11,

@@ -4,7 +4,7 @@
   "checker": "integerCombinations",
   "cases": [
     {
-      "label": "reuse smaller candidate",
+      "label": "reuse smaller crate",
       "input": [
         [
           2,
@@ -26,7 +26,7 @@
       ]
     },
     {
-      "label": "multiple combinations",
+      "label": "multiple loadouts",
       "input": [
         [
           2,
@@ -54,7 +54,7 @@
       ]
     },
     {
-      "label": "no combination",
+      "label": "no loadout",
       "input": [
         [
           2
@@ -64,7 +64,7 @@
       "expected": []
     },
     {
-      "label": "unsorted candidates",
+      "label": "unsorted crate sizes",
       "input": [
         [
           7,

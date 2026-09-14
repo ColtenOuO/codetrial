@@ -4,28 +4,28 @@
   "checker": "exact",
   "cases": [
     {
-      "label": "four queens",
+      "label": "four towers",
       "input": [
         4
       ],
       "expected": 2
     },
     {
-      "label": "single queen",
+      "label": "single tower",
       "input": [
         1
       ],
       "expected": 1
     },
     {
-      "label": "two queens impossible",
+      "label": "two towers impossible",
       "input": [
         2
       ],
       "expected": 0
     },
     {
-      "label": "five queens",
+      "label": "five towers",
       "input": [
         5
       ],

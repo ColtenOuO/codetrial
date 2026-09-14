@@ -5,7 +5,7 @@
   "outputParam": 0,
   "cases": [
     {
-      "label": "right rotate by three",
+      "label": "shift right by three",
       "input": [
         [
           1,

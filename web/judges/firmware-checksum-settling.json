@@ -11,7 +11,7 @@
       "expected": true
     },
     {
-      "label": "cycle at four",
+      "label": "loops through four",
       "input": [
         2
       ],
@@ -25,14 +25,14 @@
       "expected": true
     },
     {
-      "label": "larger happy",
+      "label": "larger settles",
       "input": [
         100
       ],
       "expected": true
     },
     {
-      "label": "larger cycle",
+      "label": "larger loop",
       "input": [
         116
       ],

@@ -525,7 +525,7 @@
     "outputParam": 0,
     "cases": [
       {
-        "label": "right rotate by three",
+        "label": "shift right by three",
         "input": [
           [
             1,
@@ -839,7 +839,7 @@
     "checker": "exact",
     "cases": [
       {
-        "label": "two jumps",
+        "label": "two hops",
         "input": [
           [
             2,
@@ -874,7 +874,7 @@
         "expected": 0
       },
       {
-        "label": "three jumps needed",
+        "label": "three hops needed",
         "input": [
           [
             1,
@@ -887,7 +887,7 @@
         "expected": 3
       },
       {
-        "label": "first jump can skip far",
+        "label": "first hop can skip far",
         "input": [
           [
             4,
@@ -940,7 +940,7 @@
         "expected": 1
       },
       {
-        "label": "all zero citations",
+        "label": "no dependents anywhere",
         "input": [
           [
             0,
@@ -1209,7 +1209,7 @@
         "expected": 3
       },
       {
-        "label": "impossible total gas",
+        "label": "total charge falls short",
         "input": [
           [
             2,
@@ -1245,7 +1245,7 @@
         "expected": 4
       },
       {
-        "label": "single exact station",
+        "label": "single exact depot",
         "input": [
           [
             1
@@ -1841,7 +1841,7 @@
         ]
       },
       {
-        "label": "last line left justified",
+        "label": "last line left aligned",
         "input": [
           [
             "a",
@@ -2264,7 +2264,7 @@
         "expected": true
       },
       {
-        "label": "cycle at four",
+        "label": "loops through four",
         "input": [
           2
         ],
@@ -2278,14 +2278,14 @@
         "expected": true
       },
       {
-        "label": "larger happy",
+        "label": "larger settles",
         "input": [
           100
         ],
         "expected": true
       },
       {
-        "label": "larger cycle",
+        "label": "larger loop",
         "input": [
           116
         ],
@@ -3737,7 +3737,7 @@
         ]
       },
       {
-        "label": "simultaneous blinker",
+        "label": "column turns into row",
         "input": [
           [
             [
@@ -3861,7 +3861,7 @@
         "expected": true
       },
       {
-        "label": "magazine too short despite matches",
+        "label": "tiles too short despite matches",
         "input": [
           "abc",
           "ab"
@@ -4147,7 +4147,7 @@
         ]
       },
       {
-        "label": "separate non-anagram groups",
+        "label": "separate letter sets",
         "input": [
           [
             "abc",
@@ -4534,7 +4534,7 @@
         ]
       },
       {
-        "label": "insert before all",
+        "label": "new block before all",
         "input": [
           [
             [
@@ -4559,7 +4559,7 @@
         ]
       },
       {
-        "label": "insert after all",
+        "label": "new block after all",
         "input": [
           [
             [
@@ -4673,7 +4673,7 @@
         "expected": 4
       },
       {
-        "label": "touching endpoints share arrow",
+        "label": "touching endpoints share check",
         "input": [
           [
             [
@@ -4697,7 +4697,7 @@
         "expected": 2
       },
       {
-        "label": "nested balloons",
+        "label": "nested windows",
         "input": [
           [
             [
@@ -5111,7 +5111,7 @@
     "cyclePosParam": 1,
     "cases": [
       {
-        "label": "cycle begins in middle",
+        "label": "loop begins in middle",
         "input": [
           [
             3,
@@ -5124,7 +5124,7 @@
         "expected": true
       },
       {
-        "label": "cycle at head",
+        "label": "loop at head",
         "input": [
           [
             1,
@@ -5135,7 +5135,7 @@
         "expected": true
       },
       {
-        "label": "single node no cycle",
+        "label": "single task no loop",
         "input": [
           [
             1
@@ -6091,7 +6091,7 @@
     "outputType": "linkedList",
     "cases": [
       {
-        "label": "stable mixed partition",
+        "label": "stable mixed split",
         "input": [
           [
             1,
@@ -6127,7 +6127,7 @@
         ]
       },
       {
-        "label": "all nodes stay before partition",
+        "label": "all nodes stay before split",
         "input": [
           [
             1,
@@ -7661,7 +7661,7 @@
         ]
       },
       {
-        "label": "complete second example",
+        "label": "complete second tree",
         "input": [
           [
             3,
@@ -8610,7 +8610,7 @@
     "checker": "exact",
     "cases": [
       {
-        "label": "one big island",
+        "label": "one big region",
         "input": [
           [
             [
@@ -8646,7 +8646,7 @@
         "expected": 1
       },
       {
-        "label": "three islands",
+        "label": "three regions",
         "input": [
           [
             [
@@ -8682,7 +8682,7 @@
         "expected": 3
       },
       {
-        "label": "single land cell",
+        "label": "single copper cell",
         "input": [
           [
             [
@@ -8693,7 +8693,7 @@
         "expected": 1
       },
       {
-        "label": "all water",
+        "label": "all bare board",
         "input": [
           [
             [
@@ -8747,7 +8747,7 @@
     "outputParam": 0,
     "cases": [
       {
-        "label": "enclosed region flips",
+        "label": "sealed pocket fills",
         "input": [
           [
             [
@@ -8819,7 +8819,7 @@
         ]
       },
       {
-        "label": "border connected region stays",
+        "label": "edge connected pocket stays",
         "input": [
           [
             [
@@ -8858,7 +8858,7 @@
         ]
       },
       {
-        "label": "interior island flips",
+        "label": "interior pocket fills",
         "input": [
           [
             [
@@ -9297,7 +9297,7 @@
     "checker": "exact",
     "cases": [
       {
-        "label": "single prerequisite",
+        "label": "single requirement",
         "input": [
           2,
           [
@@ -9310,7 +9310,7 @@
         "expected": true
       },
       {
-        "label": "two course cycle",
+        "label": "two module loop",
         "input": [
           2,
           [
@@ -9327,7 +9327,7 @@
         "expected": false
       },
       {
-        "label": "disconnected courses",
+        "label": "disconnected modules",
         "input": [
           5,
           [
@@ -9348,7 +9348,7 @@
         "expected": true
       },
       {
-        "label": "long cycle",
+        "label": "long loop",
         "input": [
           4,
           [
@@ -9389,7 +9389,7 @@
     "checker": "dependencyOrder",
     "cases": [
       {
-        "label": "single prerequisite order",
+        "label": "single dependency order",
         "input": [
           2,
           [
@@ -9405,7 +9405,7 @@
         ]
       },
       {
-        "label": "branching prerequisites",
+        "label": "branching dependencies",
         "input": [
           4,
           [
@@ -9435,7 +9435,7 @@
         ]
       },
       {
-        "label": "single course no prerequisites",
+        "label": "single migration no dependencies",
         "input": [
           1,
           []
@@ -9445,7 +9445,7 @@
         ]
       },
       {
-        "label": "cycle returns empty",
+        "label": "loop returns empty",
         "input": [
           2,
           [
@@ -9503,7 +9503,7 @@
     "checker": "exact",
     "cases": [
       {
-        "label": "example board four moves",
+        "label": "mixed portals four turns",
         "input": [
           [
             [
@@ -9559,7 +9559,7 @@
         "expected": 4
       },
       {
-        "label": "ladder reaches finish",
+        "label": "portal reaches finish",
         "input": [
           [
             [
@@ -9644,7 +9644,7 @@
     "checker": "exact",
     "cases": [
       {
-        "label": "one mutation",
+        "label": "one base edit",
         "input": [
           "AACCGGTT",
           "AACCGGTA",
@@ -9655,7 +9655,7 @@
         "expected": 1
       },
       {
-        "label": "two step mutation",
+        "label": "two base edits",
         "input": [
           "AACCGGTT",
           "AAACGGTA",
@@ -9668,7 +9668,7 @@
         "expected": 2
       },
       {
-        "label": "end missing from bank",
+        "label": "target not approved",
         "input": [
           "AACCGGTT",
           "AACCGGTA",
@@ -9708,7 +9708,7 @@
     "checker": "exact",
     "cases": [
       {
-        "label": "classic ladder",
+        "label": "several renames",
         "input": [
           "hit",
           "cog",
@@ -9724,7 +9724,7 @@
         "expected": 5
       },
       {
-        "label": "end word absent",
+        "label": "desired name not reserved",
         "input": [
           "hit",
           "cog",
@@ -9787,7 +9787,7 @@
     "checker": "exact",
     "cases": [
       {
-        "label": "example operations",
+        "label": "mixed operations",
         "input": [
           [
             "Trie",
@@ -9945,7 +9945,7 @@
     "checker": "exact",
     "cases": [
       {
-        "label": "example wildcard searches",
+        "label": "mixed wildcard searches",
         "input": [
           [
             "WordDictionary",
@@ -10103,7 +10103,7 @@
     "checker": "arrayBag",
     "cases": [
       {
-        "label": "example board words",
+        "label": "mixed board words",
         "input": [
           [
             [
@@ -10566,7 +10566,7 @@
     "checker": "integerCombinations",
     "cases": [
       {
-        "label": "reuse smaller candidate",
+        "label": "reuse smaller crate",
         "input": [
           [
             2,
@@ -10588,7 +10588,7 @@
         ]
       },
       {
-        "label": "multiple combinations",
+        "label": "multiple loadouts",
         "input": [
           [
             2,
@@ -10616,7 +10616,7 @@
         ]
       },
       {
-        "label": "no combination",
+        "label": "no loadout",
         "input": [
           [
             2
@@ -10626,7 +10626,7 @@
         "expected": []
       },
       {
-        "label": "unsorted candidates",
+        "label": "unsorted crate sizes",
         "input": [
           [
             7,
@@ -10685,28 +10685,28 @@
     "checker": "exact",
     "cases": [
       {
-        "label": "four queens",
+        "label": "four towers",
         "input": [
           4
         ],
         "expected": 2
       },
       {
-        "label": "single queen",
+        "label": "single tower",
         "input": [
           1
         ],
         "expected": 1
       },
       {
-        "label": "two queens impossible",
+        "label": "two towers impossible",
         "input": [
           2
         ],
         "expected": 0
       },
       {
-        "label": "five queens",
+        "label": "five towers",
         "input": [
           5
         ],
@@ -11358,7 +11358,7 @@
     "checker": "exact",
     "cases": [
       {
-        "label": "positive palindrome",
+        "label": "positive mirrored number",
         "input": [
           121
         ],
@@ -11386,7 +11386,7 @@
         "expected": true
       },
       {
-        "label": "even length palindrome",
+        "label": "even length mirrored",
         "input": [
           1221
         ],
@@ -11407,35 +11407,35 @@
     "checker": "exact",
     "cases": [
       {
-        "label": "two steps",
+        "label": "two slots",
         "input": [
           2
         ],
         "expected": 2
       },
       {
-        "label": "three steps",
+        "label": "three slots",
         "input": [
           3
         ],
         "expected": 3
       },
       {
-        "label": "one step",
+        "label": "one slot",
         "input": [
           1
         ],
         "expected": 1
       },
       {
-        "label": "four steps",
+        "label": "four slots",
         "input": [
           4
         ],
         "expected": 5
       },
       {
-        "label": "larger staircase",
+        "label": "longer rail",
         "input": [
           10
         ],
@@ -11512,14 +11512,14 @@
         "expected": 0
       },
       {
-        "label": "first trailing zero",
+        "label": "first ending zero",
         "input": [
           5
         ],
         "expected": 1
       },
       {
-        "label": "zero factorial",
+        "label": "zero jobs",
         "input": [
           0
         ],
@@ -11579,7 +11579,7 @@
         "expected": 12
       },
       {
-        "label": "single house",
+        "label": "single site",
         "input": [
           [
             5
@@ -11747,7 +11747,7 @@
         "expected": 2
       },
       {
-        "label": "large coin ignored",
+        "label": "large token ignored",
         "input": [
           [
             5,
@@ -11974,7 +11974,7 @@
     "checker": "exact",
     "cases": [
       {
-        "label": "interior peak",
+        "label": "interior crest",
         "input": [
           [
             1,
@@ -11995,7 +11995,7 @@
         "expected": 0
       },
       {
-        "label": "left edge peak",
+        "label": "left edge crest",
         "input": [
           [
             3,
@@ -12006,7 +12006,7 @@
         "expected": 0
       },
       {
-        "label": "right edge peak",
+        "label": "right edge crest",
         "input": [
           [
             1,
@@ -12017,7 +12017,7 @@
         "expected": 2
       },
       {
-        "label": "negative interior peak",
+        "label": "negative interior crest",
         "input": [
           [
             -5,
@@ -12042,7 +12042,7 @@
     "checker": "exact",
     "cases": [
       {
-        "label": "rotated middle",
+        "label": "wraps in middle",
         "input": [
           [
             3,
@@ -12055,7 +12055,7 @@
         "expected": 1
       },
       {
-        "label": "rotated with zero",
+        "label": "wraps with zero",
         "input": [
           [
             4,
@@ -12070,7 +12070,7 @@
         "expected": 0
       },
       {
-        "label": "not rotated",
+        "label": "not wrapped",
         "input": [
           [
             11,
@@ -13004,7 +13004,7 @@
     "checker": "exact",
     "cases": [
       {
-        "label": "target in rotated suffix",
+        "label": "target after the wrap",
         "input": [
           [
             4,
@@ -13046,7 +13046,7 @@
         "expected": -1
       },
       {
-        "label": "not rotated",
+        "label": "not wrapped",
         "input": [
           [
             1,
@@ -13059,7 +13059,7 @@
         "expected": 2
       },
       {
-        "label": "target in rotated prefix",
+        "label": "target before the wrap",
         "input": [
           [
             6,
@@ -13350,7 +13350,7 @@
     "checker": "exact",
     "cases": [
       {
-        "label": "interleaves",
+        "label": "weaves into buffer",
         "input": [
           "aabcc",
           "dbbca",
@@ -13359,7 +13359,7 @@
         "expected": true
       },
       {
-        "label": "cannot interleave",
+        "label": "buffer cannot match logs",
         "input": [
           "aabcc",
           "dbbca",

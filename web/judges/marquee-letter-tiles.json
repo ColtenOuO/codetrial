@@ -36,7 +36,7 @@
       "expected": true
     },
     {
-      "label": "magazine too short despite matches",
+      "label": "tiles too short despite matches",
       "input": [
         "abc",
         "ab"

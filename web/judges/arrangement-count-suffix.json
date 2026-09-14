@@ -11,14 +11,14 @@
       "expected": 0
     },
     {
-      "label": "first trailing zero",
+      "label": "first ending zero",
       "input": [
         5
       ],
       "expected": 1
     },
     {
-      "label": "zero factorial",
+      "label": "zero jobs",
       "input": [
         0
       ],

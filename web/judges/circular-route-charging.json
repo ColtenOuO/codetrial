@@ -24,7 +24,7 @@
       "expected": 3
     },
     {
-      "label": "impossible total gas",
+      "label": "total charge falls short",
       "input": [
         [
           2,
@@ -60,7 +60,7 @@
       "expected": 4
     },
     {
-      "label": "single exact station",
+      "label": "single exact depot",
       "input": [
         [
           1

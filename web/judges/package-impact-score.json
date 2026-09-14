@@ -28,7 +28,7 @@
       "expected": 1
     },
     {
-      "label": "all zero citations",
+      "label": "no dependents anywhere",
       "input": [
         [
           0,

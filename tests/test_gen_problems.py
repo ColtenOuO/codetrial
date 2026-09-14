@@ -77,7 +77,7 @@ class VariantValidationTests(unittest.TestCase):
         "paramNames": ["coins", "amount"],
         "cases": [
             {"label": "makes amount", "input": [[1, 2, 5], 11], "expected": 3},
-            {"label": "unreachable", "input": [[5, 7], 1], "expected": -1},
+            {"label": "coins overshoot", "input": [[5, 7], 1], "expected": -1},
         ],
     }
     variant = {
@@ -108,6 +108,11 @@ class VariantValidationTests(unittest.TestCase):
         for code in posed["problem"]["starterCode"].values():
             self.assertIn("fewestTokens(", code)
             self.assertNotIn("coin", code.lower())
+        # A label is read on every run, and only the declared words move in it.
+        self.assertEqual(
+            [case["label"] for case in posed["judge"]["cases"]],
+            ["makes amount", "tokens overshoot"],
+        )
         # The bank keeps what LeetCode publishes; only the posed copies move.
         self.assertEqual(self.judge["entry"], "coinChange")
         self.assertEqual(
@@ -133,6 +138,8 @@ class VariantValidationTests(unittest.TestCase):
             GEN.validated_variant(self.problem, self.judge, variant)
         self.rejects("declares a new entry", className="KioskPayout")
         self.rejects("renames only judge parameters", parameters={"money": "cash"})
+        self.rejects("is the published name", parameters={"coins": "coinChange"})
+        self.rejects("is the published name", terms={"Coin": "CoinChange"})
 
     def test_a_class_problem_takes_a_new_class_name_everywhere_it_is_called(self):
         problem = {
@@ -217,9 +224,9 @@ class VariantValidationTests(unittest.TestCase):
         self.assertTrue(GEN.names_source("Merge Intervals", "Classic merge intervals."))
 
     def test_published_sample_text_is_refused_wherever_the_browser_gets_it(self):
-        sample = {"label": "sample", "input": [[1], 2], "expected": "coin change"}
-        judge = {**self.judge, "cases": [*self.judge["cases"], sample]}
-        self.rejects("judge case 'sample' names the source title", judge=judge)
+        sentence = {"label": "sentence", "input": [[1], 2], "expected": "coin change"}
+        judge = {**self.judge, "cases": [*self.judge["cases"], sentence]}
+        self.rejects("judge case 'sentence' names the source title", judge=judge)
         problem = {
             **self.problem,
             "starterCode": {"python": "# Coin Change\ndef fewestTokens(): pass\n"},
@@ -343,7 +350,13 @@ class VariantValidationTests(unittest.TestCase):
         self.rejects("printable ASCII", hints=["Try \u2264 6.", "b", "c"])
 
     def test_a_case_label_may_not_name_its_source_or_the_trick(self):
-        for label in ("leetcode sample", "greedy fails", "min heap order"):
+        for label in (
+            "leetcode sample",
+            "example board",
+            "coinchange overflow",
+            "greedy fails",
+            "min heap order",
+        ):
             judge = {
                 **self.judge,
                 "cases": [{"label": label, "input": [[1], 1], "expected": 1}],
@@ -351,6 +364,27 @@ class VariantValidationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "gives it away"):
                 GEN.check_labels("coin-change", judge)
         GEN.check_labels("coin-change", self.judge)
+        twice = {**self.judge, "cases": [self.judge["cases"][0]] * 2}
+        with self.assertRaisesRegex(RuntimeError, "labels repeat"):
+            GEN.check_labels("coin-change", twice)
+        # Distinct in the bank, the same once a parameter rename reaches them.
+        judge = {
+            **self.judge,
+            "cases": [
+                {**self.judge["cases"][0], "label": "tokens run out"},
+                {**self.judge["cases"][1], "label": "coins run out"},
+            ],
+        }
+        self.rejects("labels repeat", judge=judge)
+        # A rename is checked as it ships, not as the bank spelled it.
+        self.rejects("gives it away", parameters={"coins": "heap"})
+        # A published name counts however it is spaced.
+        spaced = {
+            **self.judge,
+            "cases": [{"label": "coin change edge", "input": [[1], 1], "expected": 1}],
+        }
+        with self.assertRaisesRegex(RuntimeError, "gives it away"):
+            GEN.check_labels("coin-change", spaced)
 
     def test_the_page_carries_the_scenario_and_only_the_source_title(self):
         posed = GEN.validated_variant(self.problem, self.judge, self.variant)

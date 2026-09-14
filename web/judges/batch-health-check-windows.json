@@ -52,7 +52,7 @@
       "expected": 4
     },
     {
-      "label": "touching endpoints share arrow",
+      "label": "touching endpoints share check",
       "input": [
         [
           [
@@ -76,7 +76,7 @@
       "expected": 2
     },
     {
-      "label": "nested balloons",
+      "label": "nested windows",
       "input": [
         [
           [

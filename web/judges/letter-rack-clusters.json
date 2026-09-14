@@ -74,7 +74,7 @@
       ]
     },
     {
-      "label": "separate non-anagram groups",
+      "label": "separate letter sets",
       "input": [
         [
           "abc",

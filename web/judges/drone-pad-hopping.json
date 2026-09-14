@@ -4,7 +4,7 @@
   "checker": "exact",
   "cases": [
     {
-      "label": "two jumps",
+      "label": "two hops",
       "input": [
         [
           2,
@@ -39,7 +39,7 @@
       "expected": 0
     },
     {
-      "label": "three jumps needed",
+      "label": "three hops needed",
       "input": [
         [
           1,
@@ -52,7 +52,7 @@
       "expected": 3
     },
     {
-      "label": "first jump can skip far",
+      "label": "first hop can skip far",
       "input": [
         [
           4,
