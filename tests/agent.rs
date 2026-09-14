@@ -582,7 +582,8 @@ fn cold_restart_keeps_the_active_behavioral_round() {
     assert!(prompt.contains("selected javascript in the editor"));
     assert!(prompt.contains("behavioral round is active"));
     assert!(prompt.contains("do not ask a new question or return to coding"));
-    assert!(prompt.contains("STAR parts already evidenced: situation, action. Continue"));
+    assert!(prompt.contains("STAR parts already evidenced: situation, action."));
+    assert!(prompt.contains("Continue with the candidate's answer"));
 }
 
 #[test]
@@ -1040,7 +1041,7 @@ fn cold_restart_says_none_when_the_behavioral_round_has_no_evidence_yet() {
     };
 
     assert!(
-        cold_restart(&state).contains("STAR parts already evidenced: none. Continue"),
+        cold_restart(&state).contains("STAR parts already evidenced: none."),
         "an empty list has to be spelled, not left blank"
     );
 }
@@ -1293,13 +1294,16 @@ fn live_instructions_pose_the_variant_and_hold_no_source_or_walkthrough() {
             "{} names its source problem",
             problem.id
         );
-        for part in variant
-            .brief
-            .iter()
-            .chain(variant.follow_ups)
-            .chain(variant.constraints)
-        {
+        for part in variant.brief.iter().chain(variant.constraints) {
             assert!(prompt.contains(part), "{} lost {part}", problem.id);
+        }
+        // Held back until the coding round completes; see released_follow_ups.
+        for part in variant.follow_ups {
+            assert!(
+                !prompt.contains(part),
+                "{} holds a follow-up from the first turn",
+                problem.id
+            );
         }
         assert!(prompt.contains(variant.contract), "{}", problem.id);
 
@@ -1334,7 +1338,7 @@ fn live_instructions_pose_the_variant_and_hold_no_source_or_walkthrough() {
         "SOURCE DISCIPLINE",
         "Never name it yourself, nor any\npractice site",
         "never answer a question they did not ask",
-        "of these, in order and one at a time",
+        "held back until the coding round is complete",
         "returns the one clue to give now",
         "from a ladder\n   you do not otherwise hold",
     ] {

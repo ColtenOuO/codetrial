@@ -30,9 +30,9 @@ pub use prompts::{
     InterimReviewInput, LanguageChoiceContext, ReportPromptInput, build_instructions_for_plan,
     cold_restart, format_test_run, greeting, hint_ladder_used_text, hint_rung_text,
     hint_rung_withheld_text, interim_review_prompt, language_choice, log_hint_text, numbered,
-    proactive_review, read_editor_text, report_prompt, rolling_assessment, significant_change,
-    silence_nudge, spoken_language, test_results_reaction, test_setup_error_reaction, time_warning,
-    wrap_up,
+    proactive_review, read_editor_text, released_follow_ups, report_prompt, rolling_assessment,
+    significant_change, silence_nudge, spoken_language, test_results_reaction,
+    test_setup_error_reaction, time_warning, wrap_up,
 };
 pub use report::{
     MAX_SUMMARY_TEXT, fallback_report, final_report, report_response_schema, validate_report,
@@ -685,6 +685,9 @@ pub struct RuntimeState {
     /// can tell.
     pub hint_ladder: &'static [&'static str],
     pub hint_rungs_given: usize,
+    /// The variant's follow-ups, released by the evidence call that completes
+    /// the coding round; see `released_follow_ups`.
+    pub follow_ups: &'static [&'static str],
     pub integrity_events: Vec<serde_json::Value>,
     /// The chain cursor, held apart from the evidence above.
     ///
@@ -742,6 +745,7 @@ impl RuntimeState {
         let variant = problem.variant();
         Self {
             hint_ladder: variant.hints,
+            follow_ups: variant.follow_ups,
             code_templates: variant
                 .starters
                 .iter()
@@ -775,6 +779,7 @@ impl Default for RuntimeState {
             hints_used: 0,
             hint_ladder: &[],
             hint_rungs_given: 0,
+            follow_ups: &[],
             integrity_events: Vec::new(),
             integrity_chain: None,
             integrity_first_heartbeat: None,
