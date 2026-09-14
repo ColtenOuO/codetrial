@@ -456,6 +456,26 @@ class ThresholdBoundaryTests(unittest.TestCase):
         self.assertFalse(GEN.quotes_example(("abcde",), "Line up xabcde."))
 
 
+class ScaffoldTests(unittest.TestCase):
+    def test_a_scaffold_names_the_judge_fields_it_cannot_infer(self):
+        judge = {"argTypes": ["linkedList"], "paramTypes": ["ListNode"]}
+        self.assertEqual(GEN.scaffold_gaps({**judge, "returnType": "integer"}), [])
+        self.assertEqual(
+            GEN.scaffold_gaps({**judge, "returnType": "void"}),
+            ["outputParam or outputPrefixParam naming the argument it changes"],
+        )
+        self.assertEqual(
+            GEN.scaffold_gaps({**judge, "returnType": "Node"}),
+            ["outputType for the Node it returns"],
+        )
+        self.assertEqual(
+            GEN.scaffold_gaps(
+                {"argTypes": [None], "paramTypes": ["Node"], "returnType": "Node"}
+            ),
+            ["argTypes for Node", "outputType for the Node it returns"],
+        )
+
+
 class GuideValidationTests(unittest.TestCase):
     """The reviewer's notes, held to the rules the import used to be trusted with."""
 

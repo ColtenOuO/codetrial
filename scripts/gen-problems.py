@@ -60,6 +60,7 @@ from problem_bank.fetch import (  # noqa: E402, F401 -- the tests and guards rea
     request_json,
     scaffold,
     scaffold_entries,
+    scaffold_gaps,
     sync_study_plan,
 )
 from problem_bank.rules import (  # noqa: E402, F401 -- the tests and guards read these here

@@ -145,7 +145,13 @@ def plan_drift() -> int:
             "variables": {"planSlug": "top-interview-150"},
         },
     )
-    live = {slug for section in plan_sections(body) for slug in section["slugs"]}
+    listed = [slug for section in plan_sections(body) for slug in section["slugs"]]
+    # A set would fold a repeated slug away and report a plan the sync then
+    # refuses as in sync.
+    if duplicates := repeated(listed):
+        print(f"plan repeats: {', '.join(duplicates)}", file=sys.stderr)
+        return 1
+    live = set(listed)
     bank = {problem["id"] for problem in read_json(SOURCE)}
     added, dropped = sorted(live - bank), sorted(bank - live)
     if not added and not dropped:
@@ -189,9 +195,7 @@ def scaffold(slug: str, force: bool) -> int:
     print(json.dumps(problem, indent=2))
     print(f"\n# problem-bank/judges.json entry for {slug}")
     print(json.dumps(judge, indent=2))
-    missing = ["statement", "examples", "constraints", "topics"]
-    if None in judge["argTypes"] and "Node" in judge["paramTypes"]:
-        missing.append("argTypes for Node")
+    missing = ["statement", "examples", "constraints", "topics", *scaffold_gaps(judge)]
     print(
         f"\nstill yours to write: {', '.join(missing)}, an expected value for each "
         f"of the {len(judge['cases'])} cases, and the house starter comment, which "
@@ -199,6 +203,23 @@ def scaffold(slug: str, force: bool) -> int:
         file=sys.stderr,
     )
     return 0
+
+
+def scaffold_gaps(judge: dict) -> list[str]:
+    """The judge fields a scaffold cannot infer and a port author must add.
+
+    Each is silent otherwise: the judge still loads, and grades the wrong thing.
+    """
+    gaps = []
+    if None in judge["argTypes"] and "Node" in judge["paramTypes"]:
+        gaps.append("argTypes for Node")
+    if judge["returnType"] == "Node" and "outputType" not in judge:
+        gaps.append("outputType for the Node it returns")
+    # An in-place problem returns nothing, so the exact checker would compare
+    # that nothing rather than the argument the candidate changed.
+    if judge["returnType"] == "void":
+        gaps.append("outputParam or outputPrefixParam naming the argument it changes")
+    return gaps
 
 
 def scaffold_entries(slug: str, title: str, detail: dict) -> tuple[dict, dict]:
@@ -299,7 +320,7 @@ def fetch(limit: int | None, delay_ms: int, force: bool) -> None:
         if detail.get("isPaidOnly"):
             skipped.append(slug)
             continue
-        fetched += 1
+        fetched += int(not was_cached)
         cached += int(was_cached)
         if not was_cached and index + 1 < len(wanted):
             time.sleep(delay_ms / 1000)
