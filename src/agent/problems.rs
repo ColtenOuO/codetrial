@@ -1242,10 +1242,16 @@ pub const PROBLEMS: &[Problem] = &[
 
 /// By id or by page name. The browser sends the page name; an id still arrives
 /// from a room minted before pages had names, and from the server's own tests.
+///
+/// Two single passes rather than one pass asking each problem for its variant:
+/// `variant()` is itself a scan, and nested it made a lookup thousands of
+/// comparisons, run twice for every row of an account's history.
 pub fn find_problem(id: &str) -> Option<&'static Problem> {
-    PROBLEMS
+    let published = super::problem_variants::PROBLEM_VARIANTS
         .iter()
-        .find(|problem| problem.id == id || problem.variant().page == id)
+        .find_map(|(published, variant)| (variant.page == id).then_some(*published))
+        .unwrap_or(id);
+    PROBLEMS.iter().find(|problem| problem.id == published)
 }
 
 /// [`find_problem`], or the default for a name the bank does not have: a bad

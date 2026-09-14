@@ -522,6 +522,66 @@ fn the_upgrade_and_the_sweep_together_spare_real_accounts_and_reports() {
     );
 }
 
+/// History saved under published ids comes back under page names, in the row
+/// and in the payload, so a signed-in lobby never fetches the page map for it.
+#[test]
+fn reports_saved_under_published_ids_are_read_under_page_names() {
+    let path = scratch("page-names");
+    initialize_account_database(&path).unwrap();
+    let author = sign_in_as(&path, "page-names", 4343);
+    let accounts = accounts_at(&path);
+    let user = user_id_for(&accounts, &author);
+    let page = crate::agent::get_problem(Some("two-sum")).variant().page;
+    for (id, problem_id) in [
+        ("old", "two-sum"),
+        ("new", page),
+        ("gone", "retired-problem"),
+    ] {
+        save_report(
+            &accounts,
+            user,
+            id,
+            problem_id,
+            &json!({ "problemId": problem_id }),
+        )
+        .unwrap();
+    }
+
+    // Stored under the published id whatever name it arrived with, so a later
+    // rename of the scenario still finds it.
+    let stored = accounts
+        .with(|connection| {
+            connection.query_row(
+                "SELECT problem_id, payload FROM reports WHERE id = 'new'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+        })
+        .unwrap();
+    assert_eq!(stored.0, "two-sum");
+    assert_eq!(stored.1, json!({ "problemId": "two-sum" }).to_string());
+
+    let rows = list_reports(&accounts, user).unwrap();
+    let read = |id: &str| {
+        let row = rows.iter().find(|row| row["id"] == id).unwrap();
+        (
+            row["problemId"].clone(),
+            row["payload"]["problemId"].clone(),
+        )
+    };
+    assert_eq!(
+        read("old"),
+        (json!(page), json!(page)),
+        "a published id is renamed"
+    );
+    assert_eq!(read("new"), (json!(page), json!(page)), "a page name stays");
+    assert_eq!(
+        read("gone"),
+        (json!("retired-problem"), json!("retired-problem")),
+        "a name the bank lacks is left alone"
+    );
+}
+
 fn user_id_for_login(path: &Path, login: &str) -> i64 {
     rusqlite::Connection::open(path)
         .unwrap()

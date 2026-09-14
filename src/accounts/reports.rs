@@ -43,16 +43,48 @@ pub fn list_reports(accounts: &Accounts, user_id: i64) -> rusqlite::Result<Vec<V
         statement
             .query_map([user_id], |row| {
                 let payload: String = row.get(2)?;
+                let mut payload = serde_json::from_str::<Value>(&payload).unwrap_or(Value::Null);
+                let page = page_named(&row.get::<_, String>(1)?);
+
+                // The handler stores the payload's own problemId in the row, so
+                // the one translation answers for both.
+                if payload.get("problemId").is_some() {
+                    payload["problemId"] = page.as_str().into();
+                }
                 Ok(json!({
                     "id": row.get::<_, String>(0)?,
-                    "problemId": row.get::<_, String>(1)?,
-                    "payload": serde_json::from_str::<Value>(&payload).unwrap_or(Value::Null),
+                    "problemId": page,
+                    "payload": payload,
                     "createdAt": row.get::<_, i64>(3)?,
                     "updatedAt": row.get::<_, i64>(4)?,
                 }))
             })?
             .collect()
     })
+}
+
+/// A saved problem id under the page name the browser now knows it by.
+///
+/// Reports are stored under the published id, and older ones were saved under
+/// it
+/// by a browser that had no page names; an id matches no lobby card. A name the
+/// bank does not know is returned as it is.
+fn page_named(problem_id: &str) -> String {
+    crate::agent::find_problem(problem_id)
+        .map_or(problem_id, |problem| problem.variant().page)
+        .to_string()
+}
+
+/// The published id a report is stored under, whatever name it arrived with.
+///
+/// The browser saves the page name, and a page name follows the scenario's
+/// title, which can be edited. Stored as the id, which never changes, a report
+/// is read back under whatever the page is called then; stored as the page
+/// name, a renamed scenario would leave it naming nothing.
+fn stored_id(problem_id: &str) -> String {
+    crate::agent::find_problem(problem_id)
+        .map_or(problem_id, |problem| problem.id)
+        .to_string()
 }
 
 /// Deletes every saved report owned by one account and returns the row count.
@@ -70,6 +102,11 @@ pub fn save_report(
     problem_id: &str,
     payload: &Value,
 ) -> rusqlite::Result<ReportSave> {
+    let problem_id = stored_id(problem_id);
+    let mut payload = payload.clone();
+    if payload.get("problemId").is_some() {
+        payload["problemId"] = problem_id.as_str().into();
+    }
     accounts.with(|connection| {
         let now = current_epoch_seconds() as i64;
 
@@ -106,7 +143,13 @@ pub fn save_report(
             updated_at = excluded.updated_at
         WHERE reports.user_id = excluded.user_id
         ",
-            (id, user_id, problem_id, payload.to_string().as_str(), now),
+            (
+                id,
+                user_id,
+                problem_id.as_str(),
+                payload.to_string().as_str(),
+                now,
+            ),
         )?;
         Ok(if changed > 0 {
             ReportSave::Saved

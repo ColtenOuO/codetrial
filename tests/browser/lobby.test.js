@@ -551,13 +551,23 @@ lobbyTest("the last difficulty cannot be unchecked into an empty lobby", async (
   );
 });
 
-lobbyTest("history saved under published ids still counts as passed", async (page) => {
-  // An earlier build saved the published id. The lobby translates it through
-  // the page map, fetched because such an entry is there; untranslated, the
-  // ids match no card, so the streak has no level and the lobby stays put.
-  reports = [hired("jump-game"), hired("gas-station")];
+lobbyTest("history saved on this device under published ids still counts as passed", async (page) => {
+  // An earlier build saved the published id. The lobby renames it through the
+  // page map, fetched because such an entry is there; unrenamed, the ids match
+  // no card, so the streak has no level and the lobby stays put. Account
+  // history arrives renamed by the server, so this is the device's own copy.
+  session = { signedIn: false };
+  await page.addInitScript((entries) => {
+    if (!localStorage.getItem("codetrial_history")) {
+      localStorage.setItem("codetrial_history", JSON.stringify(entries));
+    }
+  }, ["jump-game", "gas-station"].map((problemId, index) => ({
+    problemId, date: `2026-01-0${index + 1}T00:00:00Z`, report: { decision: "HIRE" },
+  })));
   const state = await lobby(page);
   assert.match(state.note, /passed your last two Medium problems/);
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("codetrial_history")));
+  assert.deepEqual(saved.map((entry) => entry.problemId).sort(), MEDIUM.slice().sort(), "renamed in place");
   assert.deepEqual(state.levels, ["Hard"]);
 });
 

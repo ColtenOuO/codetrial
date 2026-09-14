@@ -1,5 +1,5 @@
 import { FRAMEWORKS, codingLoop } from "./lib.js";
-import { clearReportHistory, readLocalHistory } from "./history.js";
+import { clearReportHistory, readLocalHistory, renameLocalHistory } from "./history.js";
 import { pickProblem, practiceFocus, storeSharedFocus, suggestDifficulty } from "./problem-picker.js";
 import { buildProgressModel, pickerEntry } from "./progress.js";
 import { loadPageMap } from "./problem-data.js";
@@ -453,29 +453,27 @@ async function renderServerHistory() {
     const data = await fetchJson("/api/reports");
     // The picker needs the account row's timestamp for review scheduling and
     // the verdict as it was saved; the progress panel normalizes its own.
-    reports = await withPageNames(data.reports.map(pickerEntry));
+    // The server reads its rows back under page names, so no map is needed.
+    reports = data.reports.map(pickerEntry);
     showProgress(data.reports, "saved to your account");
   } catch {
     showProgressError("Could not load saved account progress.");
   }
 }
 
-/// History saved before problems had page names carries published ids. They
-/// are translated through the map, which is fetched only when such an entry is
-/// there, so the picker still knows what the candidate has passed.
-async function withPageNames(entries) {
-  if (entries.every((entry) => cardIds.has(entry.problemId))) return entries;
-  const pages = await loadPageMap().catch(() => null);
-  return entries.map((entry) => {
-    const page = pages && Object.hasOwn(pages, entry.problemId) ? pages[entry.problemId].page : null;
-    return page ? { ...entry, problemId: page } : entry;
-  });
-}
-
+/// Local history saved before problems had page names carries published ids.
+/// The map, fetched only when such an entry is there, renames them in place
+/// once, so the picker still knows what the candidate has passed and the next
+/// visit fetches nothing. Account history needs none of this: the server reads
+/// it back under page names.
 async function renderLocalHistory() {
   try {
-    const entries = readLocalHistory();
-    reports = await withPageNames(entries.map(pickerEntry));
+    let entries = readLocalHistory();
+    if (!entries.every((entry) => cardIds.has(pickerEntry(entry).problemId))) {
+      const pages = await loadPageMap().catch(() => null);
+      if (pages) entries = renameLocalHistory(pages);
+    }
+    reports = entries.map(pickerEntry);
     showProgress(entries, "saved on this device");
   } catch {
     showProgressError("Could not load progress saved on this device.");

@@ -9,6 +9,7 @@ import {
   clearReportHistory,
   historyKey,
   readLocalHistory,
+  renameLocalHistory,
   saveReportHistory,
 } from "../../web/history.js";
 import { functionBody, memoryStorage, root } from "./source.js";
@@ -407,6 +408,31 @@ test("no handler in these files reaches for the event's current target", () => {
 // The key lives in the origin's local storage, so what it holds is input: an
 // older build, another tab, or anyone with devtools open can leave any JSON
 // under it, and every reader downstream treats what comes back as a list.
+// Old history carries published ids, and translating them costs the lobby a
+// page-map fetch on each visit. Renamed in place once, the next visit has page
+// names and fetches nothing.
+test("history saved under published ids is renamed to page names once", () => {
+  const storage = memoryStorage();
+  const pages = { "two-sum": { page: "some-scenario" } };
+  storage.setItem(historyKey, JSON.stringify([
+    { problemId: "two-sum", date: "2026-01-01" },
+    { problemId: "already-a-page" },
+    { problemId: "__proto__" },
+    "not an entry",
+  ]));
+  const renamed = renameLocalHistory(pages, storage);
+  assert.deepEqual(renamed[0], { problemId: "some-scenario", date: "2026-01-01" });
+  assert.deepEqual(renamed.slice(1), [{ problemId: "already-a-page" }, { problemId: "__proto__" }, "not an entry"]);
+  assert.deepEqual(readLocalHistory(storage), renamed, "the rename is written back");
+
+  const unchanged = memoryStorage();
+  unchanged.setItem(historyKey, "[{\"problemId\":\"already-a-page\"}]");
+  let writes = 0;
+  const counting = { ...unchanged, getItem: (key) => unchanged.getItem(key), setItem: (...args) => { writes += 1; unchanged.setItem(...args); } };
+  renameLocalHistory(pages, counting);
+  assert.equal(writes, 0, "nothing to rename is nothing written");
+});
+
 test("a stored history that is not a list reads as no history", () => {
   const stored = (value) => {
     const storage = memoryStorage();

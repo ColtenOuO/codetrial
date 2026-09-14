@@ -24,6 +24,28 @@ export function readLocalHistory(storage) {
   }
 }
 
+/// History saved before problems had page names carries published ids, and a
+/// lobby translating them fetches the page map on every visit. Rewritten once
+/// here, the next visit finds page names and fetches nothing. `pages` is that
+/// map; entries it does not name are left as they are.
+export function renameLocalHistory(pages, storage) {
+  try {
+    storage ||= localStorage;
+    const entries = readLocalHistory(storage);
+    let renamed = false;
+    const next = entries.map((entry) => {
+      const id = entry?.problemId;
+      if (typeof id !== "string" || !Object.hasOwn(pages, id)) return entry;
+      renamed = true;
+      return { ...entry, problemId: pages[id].page };
+    });
+    if (renamed) storage.setItem(historyKey, JSON.stringify(next));
+    return next;
+  } catch {
+    return readLocalHistory(storage);
+  }
+}
+
 export async function saveReportHistory(entry, { fetcher = fetch, storage } = {}) {
   const local = saveLocalReport(entry, storage);
   const account = await saveAccountReport(entry, fetcher);
