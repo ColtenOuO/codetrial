@@ -1288,26 +1288,35 @@ pub fn framework_evidence_json(evidence: &FrameworkEvidence) -> serde_json::Valu
 
 /// Count a hint and, when the candidate asked for it, hand out the next rung.
 ///
-/// The last rung names the key step, so it waits until the candidate has
-/// recorded an approach of their own: algorithm or coding evidence. Until then
-/// the request is still a hint, counted as one, and the interviewer is pointed
-/// back at the rung before it.
+/// The last rung names the key step, so it waits until the candidate has an
+/// approach of their own: an Algorithm phase observed from what they said, or
+/// Coding evidence, which the server already refuses without code they wrote.
+/// An Algorithm phase the interviewer only inferred does not count, since that
+/// is the model's word alone. Until then the interviewer gets no clue and is
+/// told to ask what the candidate would try; the request is not counted,
+/// because the candidate was given nothing.
 pub fn record_hint(state: &mut RuntimeState, requested: bool) -> String {
+    let clue = requested
+        .then(|| state.hint_ladder.get(state.hint_rungs_given))
+        .flatten();
+    if clue.is_some() {
+        let last = state.hint_rungs_given + 1 == state.hint_ladder.len();
+        let approach_stated = state.framework_evidence.iter().any(|item| {
+            item.phase == FrameworkPhase::Algorithm && item.kind == EvidenceKind::Observed
+        }) || phases_evidenced(state, &[FrameworkPhase::Coding]);
+        if last && !approach_stated {
+            return hint_rung_withheld_text(state.hints_used);
+        }
+    }
     state.hints_used = state.hints_used.saturating_add(1);
-    if !requested {
-        return log_hint_text(state.hints_used);
+    match clue {
+        Some(clue) => {
+            state.hint_rungs_given += 1;
+            hint_rung_text(state.hints_used, state.hint_rungs_given, clue)
+        }
+        None if requested => hint_ladder_used_text(state.hints_used),
+        None => log_hint_text(state.hints_used),
     }
-    let Some(clue) = state.hint_ladder.get(state.hint_rungs_given) else {
-        return hint_ladder_used_text(state.hints_used);
-    };
-    let last = state.hint_rungs_given + 1 == state.hint_ladder.len();
-    let approach_stated = phases_evidenced(state, &[FrameworkPhase::Algorithm])
-        || phases_evidenced(state, &[FrameworkPhase::Coding]);
-    if last && !approach_stated {
-        return hint_rung_withheld_text(state.hints_used);
-    }
-    state.hint_rungs_given += 1;
-    hint_rung_text(state.hints_used, state.hint_rungs_given, clue)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

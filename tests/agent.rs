@@ -1154,13 +1154,18 @@ fn log_hint_hands_out_one_rung_per_request_and_holds_the_last_for_an_approach() 
         "a withheld request hands the model a clue to improvise from: {held}"
     );
     assert_eq!(state.hint_rungs_given, 2);
-    assert_eq!(state.hints_used, 4, "a withheld rung is still a hint given");
+    assert_eq!(
+        state.hints_used, 3,
+        "a withheld rung gave the candidate nothing, so it is not a hint"
+    );
+    assert!(held.contains("Not counted as a hint; total hints so far: 3."));
 
     // Only an approach unlocks it: evidence for another phase does not, and
-    // neither does an Algorithm phase recorded as skipped.
+    // neither does an Algorithm phase the interviewer only inferred.
     for (phase, source, kind) in [
         ("repeat", "candidate_speech", "observed"),
         ("example", "candidate_speech", "inferred"),
+        ("algorithm", "candidate_speech", "inferred"),
         ("situation", "session_timing", "skipped"),
     ] {
         record_framework_evidence(
@@ -1176,9 +1181,10 @@ fn log_hint_hands_out_one_rung_per_request_and_holds_the_last_for_an_approach() 
         .unwrap();
         assert!(
             record_hint(&mut state, true).contains("stays withheld"),
-            "{phase} evidence released the key step"
+            "{phase} {kind} evidence released the key step"
         );
     }
+    assert_eq!(state.hints_used, 3, "withheld requests are never counted");
     let mut skipped = state.clone();
     skipped.framework_evidence.push(FrameworkEvidence {
         phase: FrameworkPhase::Algorithm,

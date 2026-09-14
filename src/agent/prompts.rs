@@ -1033,8 +1033,7 @@ pub fn hint_rung_text(hints_used: u32, rung: usize, clue: &str) -> String {
 /// live run answered it with the key step: "if we sort the adjustments...".
 pub fn hint_rung_withheld_text(hints_used: u32) -> String {
     format!(
-        "{} The next rung names the key step and stays withheld until the candidate has put an approach of their own into words or code. Give no clue this turn: in one short sentence, ask what they would try first, even a slow version, and wait. Do not restate an earlier clue, and name no technique, data structure, ordering, or step.",
-        log_hint_text(hints_used)
+        "Not counted as a hint; total hints so far: {hints_used}. The next rung names the key step and stays withheld until the candidate has put an approach of their own into words or code. Give no clue this turn: in one short sentence, ask what they would try first, even a slow version, and wait. Do not restate an earlier clue, and name no technique, data structure, ordering, or step."
     )
 }
 
