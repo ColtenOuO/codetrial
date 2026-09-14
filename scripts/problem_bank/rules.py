@@ -390,6 +390,26 @@ def check_new_names(problem: dict, judge: dict, variant: dict) -> None:
             raise RuntimeError(f"{problem_id}: {target!r} is the published name")
 
 
+def spoken_prose(text: dict, variant: dict) -> list[tuple[str, str]]:
+    """Every line of variant prose the candidate or interviewer reads, by where.
+
+    The brief and contract are on the page or in the prompt; the follow-ups,
+    hints and clarifications reach the interviewer, who may say any of them
+    aloud. One list, so a check over prose cannot miss a field another covers.
+    """
+    return [
+        ("contract", text["contract"]),
+        *[(f"brief[{at}]", line) for at, line in enumerate(text["brief"])],
+        *[(f"followUps[{at}]", line) for at, line in enumerate(text["follow_ups"])],
+        *[(f"hints[{at}]", line) for at, line in enumerate(text["hints"])],
+        *[
+            (f"clarifications[{at}].{part}", item[part])
+            for at, item in enumerate(variant["clarifications"])
+            for part in ("question", "answer")
+        ],
+    ]
+
+
 def check_source_absent(
     problem: dict, variant: dict, text: dict, shipped: dict, graded: dict
 ) -> None:
@@ -397,11 +417,7 @@ def check_source_absent(
     problem_id, title = problem["id"], problem["title"]
     if "leetcode" in json.dumps(variant).lower():
         raise RuntimeError(f"{problem_id}: a variant never names the source site")
-    for where, line in [
-        ("title", text["title"]),
-        ("contract", text["contract"]),
-        *[(f"brief[{at}]", line) for at, line in enumerate(text["brief"])],
-    ]:
+    for where, line in [("title", text["title"]), *spoken_prose(text, variant)]:
         if names_source(title, line):
             raise RuntimeError(f"{problem_id}: {where} names the source title")
 
@@ -532,15 +548,7 @@ def check_prose_quotes_nothing(
 ) -> None:
     """No line the candidate or interviewer reads walks a published example."""
     prose = [
-        *text["brief"],
-        text["contract"],
-        *text["follow_ups"],
-        *text["hints"],
-        *(
-            line
-            for item in variant["clarifications"]
-            for line in (item["question"], item["answer"])
-        ),
+        *(line for _, line in spoken_prose(text, variant)),
         *(
             example[key]
             for example in variant["examples"]

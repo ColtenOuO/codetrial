@@ -122,6 +122,22 @@ class VariantValidationTests(unittest.TestCase):
             brief=["A coin change problem: implement fewestTokens(tokens, amount)."],
         )
         self.rejects("source site", hints=["As on LeetCode.", "b", "c"])
+        # What the interviewer may say aloud counts as much as the page.
+        self.rejects(
+            "hints\\[0\\] names the source title",
+            hints=["Think about coin change.", "b", "c"],
+        )
+        self.rejects(
+            "followUps\\[1\\] names the source title",
+            followUps=["Limited counts?", "Is this just coin change?"],
+        )
+        self.rejects(
+            "clarifications\\[0\\].question names the source title",
+            clarifications=[
+                {"question": "Is it coin change?", "answer": "No."},
+                *self.variant["clarifications"][1:],
+            ],
+        )
         self.rejects(
             "contract names the source title", contract="Coin change, renamed."
         )
