@@ -43,17 +43,22 @@ fn offered_language(language: &str) -> Option<(&str, &'static str)> {
 
 fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> DataEventResult {
     // A packet with no string `code` is a malformed packet, not an empty
-    // editor. Defaulting to "" meant one of those wiped the authoritative
-    // buffer, and the buffer is what the report is written from.
-    let new_code = payload.get("code").and_then(serde_json::Value::as_str);
+    // editor, and it changes nothing. Defaulting to "" meant one of those wiped
+    // the authoritative buffer, and the buffer is what the report is written
+    // from; letting its language through filed the old buffer under a new
+    // language, so `state.code` would no longer be the code of
+    // `state.language`.
+    let Some(new_code) = payload.get("code").and_then(serde_json::Value::as_str) else {
+        return DataEventResult::default();
+    };
 
     // Editor packets arrive several times a second and are usually identical to
     // the last one, so only touch the buffer when the text actually moved.
     let first_code_packet = state.code.is_empty();
-    let update_last_code_change = new_code.is_some_and(|code| code != state.code);
-    if let Some(code) = new_code.filter(|_| update_last_code_change) {
+    let update_last_code_change = new_code != state.code;
+    if update_last_code_change {
         state.code.clear();
-        state.code.push_str(code);
+        state.code.push_str(new_code);
     }
 
     // A language switch is silent from the interviewer's side: the click swaps
@@ -98,6 +103,15 @@ fn apply_code_update(state: &mut RuntimeState, payload: &serde_json::Value) -> D
             LanguageChoiceContext::Start
         };
         language_changed = Some(language_choice(spoken.1, context));
+    }
+
+    // The starters come from the problem (`RuntimeState::for_problem`), never
+    // from a packet. A language the problem has no starter for, which only a
+    // state built without one meets, falls back to its first buffer.
+    if !state.code_templates.contains_key(&state.language) {
+        state
+            .code_templates
+            .insert(state.language.clone(), new_code.to_string());
     }
 
     DataEventResult {

@@ -33,9 +33,12 @@ fn the_rounds_a_report_calls_complete_are_the_ones_with_evidence() {
         .expect("evidence should record");
     };
 
-    // Nothing banked: neither round is claimed.
+    // Nothing banked: neither round is claimed. The editor holds written code
+    // throughout, so what decides each status below is the evidence and nothing
+    // else.
     let bare = RuntimeState {
         interview_loop: crate::agent::InterviewLoop::CodingBehavioral,
+        code: "def solve(nums):\n    return sorted(nums)\n".to_string(),
         ..RuntimeState::default()
     };
     assert_eq!(rounds(&bare)[0]["status"], "incomplete");
@@ -317,7 +320,10 @@ fn an_interview_past_the_evidence_cap_still_reports_every_phase_it_reached() {
     ])
     .unwrap();
     let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
-    let mut state = RuntimeState::default();
+    let mut state = RuntimeState {
+        code: "def solve(nums):\n    return sorted(nums)\n".to_string(),
+        ..RuntimeState::default()
+    };
     for phase in [
         "repeat",
         "example",

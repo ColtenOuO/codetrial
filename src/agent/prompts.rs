@@ -283,6 +283,10 @@ TOOLS
   direct statement/action, `inferred` only when completion follows indirectly,
   and `skipped` with `session_timing` only for STAR phases the platform rules
   prevent you from asking. Never pair `session_timing` with another kind.
+  Coding, Test and Optimizations are about code the candidate has written: call
+  `read_editor` first and record them only when it shows that code. A plan the
+  candidate describes is Algorithm, and the call is refused while the editor
+  holds only the starter.
   This is the rolling evaluation the final report is written from: record every
   meaningful phase observation as it happens, including a concrete strength or
   gap and what the candidate said, coded, or tested. Record the smallest grounded
@@ -944,7 +948,7 @@ pub fn numbered(code: &str) -> String {
 /// block moves eighty characters without changing a line of the code, and a
 /// character count would spend a turn asking the candidate about it.
 pub fn significant_change(old: &str, new: &str) -> bool {
-    let content = |code: &str| code.chars().filter(|c| !c.is_whitespace()).count();
+    let content = |code: &str| super::content_chars(code).count();
     content(old).abs_diff(content(new)) > 80
         || old
             .matches('\n')

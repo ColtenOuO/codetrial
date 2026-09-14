@@ -363,7 +363,7 @@ async function init() {
   // a caption nobody said.
   showCaptions();
   await connect(preflight, presenting);
-  publish(topics.code, codeUpdatePayload(currentCode(), state.language));
+  publishCode();
   state.endsAt = Date.now() + durationMin * 60 * 1000;
   tickTimer();
   setInterval(tickTimer, 1000);
@@ -474,7 +474,7 @@ function bindEvents() {
     paintEditor();
     clearTimeout(codePublishTimer);
     codePublishTimer = setTimeout(() => {
-      publish(topics.code, codeUpdatePayload(currentCode(), state.language, Date.now()));
+      publishCode(Date.now());
       codePublishTimer = null;
     }, CODE_PUBLISH_DEBOUNCE_MS);
   });
@@ -836,7 +836,7 @@ async function connectLiveKit(connection, preflight, presenting = false) {
     // so Jim is reading what the candidate is actually looking at rather than
     // whatever the last queued keystroke said.
     flushPendingPublishes();
-    publish(topics.code, codeUpdatePayload(currentCode(), state.language));
+    publishCode();
     updateAgentState();
   });
   room.on(livekit.RoomEvent.Disconnected, () => {
@@ -1162,7 +1162,7 @@ function setLanguage(language) {
   // agent to ignore packets the browser should not have sent.
   clearTimeout(codePublishTimer);
   codePublishTimer = setTimeout(() => {
-    publish(topics.code, codeUpdatePayload(currentCode(), state.language));
+    publishCode();
     codePublishTimer = null;
   }, CODE_PUBLISH_DEBOUNCE_MS);
 }
@@ -1453,7 +1453,7 @@ function flushPendingCodePublish() {
   if (!codePublishTimer) return;
   clearTimeout(codePublishTimer);
   codePublishTimer = null;
-  publish(topics.code, codeUpdatePayload(currentCode(), state.language, Date.now()));
+  publishCode(Date.now());
   // The same debounce the agent gets. An event per keystroke would be the
   // whole per-interview budget spent on the first ten minutes of typing.
   recordReplay("editor", { code: currentCode(), language: state.language });
@@ -1794,4 +1794,10 @@ function paintEditor() {
 
 function currentCode() {
   return nodes.editor.value;
+}
+
+/// The one way the editor reaches the agent: the buffer and its language. The
+/// agent holds its own copy of the starters it measures written code against.
+function publishCode(at) {
+  publish(topics.code, codeUpdatePayload(currentCode(), state.language, at));
 }

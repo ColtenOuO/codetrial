@@ -1139,6 +1139,10 @@ def rust_variants(problems: list[dict], variants: dict) -> str:
             f"({rust_str(item['question'])}, {rust_str(item['answer'])})"
             for item in variant["clarifications"]
         )
+        starters = ", ".join(
+            f"({rust_str(language)}, {rust_str(code)})"
+            for language, code in entry["problem"]["starterCode"].items()
+        )
         rows.append(
             "\n".join(
                 [
@@ -1151,6 +1155,7 @@ def rust_variants(problems: list[dict], variants: dict) -> str:
                     f"        clarifications: &[{clarifications}],",
                     f"        follow_ups: {rust_strs(variant['followUps'])},",
                     f"        hints: {rust_strs(variant['hints'])},",
+                    f"        starters: &[{starters}],",
                     "    }),",
                 ]
             )

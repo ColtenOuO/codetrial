@@ -409,7 +409,7 @@ test("a dropped connection is visible and recovers its state", () => {
   assert.match(connect, /providerUiState\("reconnecting"\)/);
   // Nothing published during the gap arrived, so the buffer is resent rather
   // than left to drift until the next keystroke.
-  assert.match(connect, /Reconnected[\s\S]*?publish\(topics\.code/);
+  assert.match(connect, /Reconnected[\s\S]*?publishCode\(/);
 });
 
 // A degraded start looks identical whether the server has no LiveKit

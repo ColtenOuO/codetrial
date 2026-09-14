@@ -1425,8 +1425,7 @@ fn initial_runtime_state(boot: &RuntimeBootstrap<'_>, started_at: Instant) -> Ru
         interview_loop: boot.interview_loop,
         coding_minutes: boot.coding_minutes,
         behavioral_minutes: boot.behavioral_minutes,
-        hint_ladder: boot.problem.variant().hints,
-        ..RuntimeState::default()
+        ..RuntimeState::for_problem(boot.problem)
     }
 }
 

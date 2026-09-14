@@ -420,10 +420,7 @@ async fn live_interviewer_poses_the_variant_and_serves_hints_in_order() {
                 InterviewLoop::CodingBehavioral,
             ),
             contents: Vec::new(),
-            state: RuntimeState {
-                hint_ladder: problem.variant().hints,
-                ..RuntimeState::default()
-            },
+            state: RuntimeState::for_problem(problem),
         };
         let mut fail = |what: String| failures.push(format!("{}: {what}", problem.id));
         let brief = problem.variant().brief_text();

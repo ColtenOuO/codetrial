@@ -190,8 +190,20 @@ fn timing_constants_match_frozen_fixture() {
     assert_eq!(json!(rust), expected);
 }
 
-/// Every prompt the agent sends, in one place, so the frozen fixture and the
-/// regeneration path cannot drift apart.
+/// A state whose editor holds code the candidate wrote. Coding, Test and
+/// Optimizations evidence is refused without it, so a test about something
+/// else that records those phases starts here.
+fn with_written_code(state: RuntimeState) -> RuntimeState {
+    // An empty starter on file, so a packet a test sends later is measured
+    // against it instead of becoming the language's first buffer itself.
+    let code_templates = [(state.language.clone(), String::new())].into();
+    RuntimeState {
+        code: "def solve(nums):\n    return sorted(nums)\n".to_string(),
+        code_templates,
+        ..state
+    }
+}
+
 /// A state whose clock has reached the point the browser announces the warning
 /// at, which the agent now checks before believing the packet.
 fn near_time_up(state: RuntimeState) -> RuntimeState {
@@ -203,6 +215,8 @@ fn near_time_up(state: RuntimeState) -> RuntimeState {
     }
 }
 
+/// Every prompt the agent sends, in one place, so the frozen fixture and the
+/// regeneration path cannot drift apart.
 fn prompt_samples() -> Value {
     let problem = get_problem(Some("two-sum"));
     let cold_state = RuntimeState {
@@ -539,12 +553,12 @@ fn prompts_match_frozen_fixture() {
 
 #[test]
 fn cold_restart_keeps_the_active_behavioral_round() {
-    let mut state = RuntimeState {
+    let mut state = with_written_code(RuntimeState {
         behavioral_round_started: true,
         language: "javascript".to_string(),
         language_chosen: true,
         ..RuntimeState::default()
-    };
+    });
 
     // The coding phase is recorded alongside the STAR ones on purpose. The list
     // in this prompt is STAR-only, and an unfiltered one would hand the coding
@@ -794,6 +808,172 @@ fn a_language_switch_is_recorded_as_a_choice_and_the_first_packet_is_not() {
     );
     assert!(state.language_chosen);
     assert_eq!(state.language, "cpp");
+}
+
+/// Coding, Test and Optimizations are checked against the editor, not taken on
+/// the interviewer's word: a session once ticked Coding with nothing typed.
+#[test]
+fn code_phases_need_code_the_candidate_wrote() {
+    let starter = "class Solution:\n    def solve(self, nums):\n        # Think out loud as you go!\n        pass\n";
+    let code = |state: &mut RuntimeState, text: &str, language: &str| {
+        apply_data_event(
+            state,
+            TOPIC_CODE_UPDATE,
+            &json!({"code": text, "language": language}),
+            99.0,
+        );
+    };
+    let record = |state: &mut RuntimeState, phase: &str, kind: &str| {
+        let source = if kind == "skipped" {
+            "session_timing"
+        } else {
+            "candidate_speech"
+        };
+        record_framework_evidence(
+            state,
+            &json!({"phase": phase, "source": source, "kind": kind,
+                    "confidence": 90, "summary": format!("{kind} {phase}")}),
+        )
+    };
+
+    let mut state = RuntimeState::default();
+    for phase in ["coding", "test", "optimizations"] {
+        assert!(
+            record(&mut state, phase, "observed").is_err(),
+            "{phase} with no editor"
+        );
+        assert!(
+            record(&mut state, phase, "inferred").is_err(),
+            "{phase} inferred"
+        );
+    }
+
+    // Everything else is about talking, and a skip is a record of not reaching
+    // it.
+    assert!(record(&mut state, "algorithm", "observed").is_ok());
+    assert!(record(&mut state, "coding", "skipped").is_ok());
+
+    // The starter on connect is the browser's, not the candidate's.
+    code(&mut state, starter, "python");
+    assert_eq!(state.code_templates["python"], starter);
+    assert!(!code_written(&state));
+    // Nor is a stray keystroke, or a comment deleted.
+    code(&mut state, &format!("{starter} "), "python");
+    assert!(state.code_edited && !code_written(&state));
+    code(
+        &mut state,
+        &starter.replace("# Think out loud as you go!", ""),
+        "python",
+    );
+    assert!(!code_written(&state));
+    assert!(record(&mut state, "coding", "observed").is_err());
+
+    // A line of real code is.
+    code(
+        &mut state,
+        &starter.replace("pass", "return sorted(nums)[0]"),
+        "python",
+    );
+    assert!(code_written(&state));
+    for phase in ["coding", "test", "optimizations"] {
+        assert!(
+            record(&mut state, phase, "observed").is_ok(),
+            "{phase} with code"
+        );
+    }
+
+    // A language switch brings its own template, which is measured afresh.
+    let mut switched = RuntimeState::default();
+    code(&mut switched, starter, "python");
+    code(
+        &mut switched,
+        "int solve(int* nums, int numsSize) {\n    return 0;\n}\n",
+        "c",
+    );
+    assert!(
+        !code_written(&switched),
+        "a template swapped in by a switch is not work"
+    );
+
+    // A one-line answer counts even with the starter's comment deleted: a
+    // deletion is not credited against what was typed.
+    let mut short = RuntimeState::default();
+    let cpp_starter = "class Solution {\npublic:\n    int mySqrt(int x) {\n        // Think out loud as you go!\n        return 0;\n    }\n};\n";
+    code(&mut short, cpp_starter, "cpp");
+    code(
+        &mut short,
+        &cpp_starter
+            .replace("        // Think out loud as you go!\n", "")
+            .replace("return 0;", "return sqrt(x);"),
+        "cpp",
+    );
+    assert!(code_written(&short), "return sqrt(x); is code");
+
+    // A problem's starters are the server's. A switch packet may arrive only
+    // after the candidate has typed, since the browser debounces both, and the
+    // edit is still measured against the real starter; a packet claiming a
+    // different one changes nothing.
+    let problem = get_problem(Some("two-sum"));
+    let c_starter = problem
+        .variant()
+        .starters
+        .iter()
+        .find(|(language, _)| *language == "c")
+        .map(|(_, code)| *code)
+        .expect("every problem has a C starter");
+    let mut raced_switch = RuntimeState::for_problem(problem);
+    apply_data_event(
+        &mut raced_switch,
+        TOPIC_CODE_UPDATE,
+        &json!({"code": c_starter.replace("return NULL;", "return pairOf(nums);"),
+                "language": "c", "starterCode": ""}),
+        99.0,
+    );
+    assert_eq!(raced_switch.code_templates["c"], c_starter);
+    assert!(
+        code_written(&raced_switch),
+        "an edited first switch packet is work"
+    );
+    let mut forged = RuntimeState::for_problem(problem);
+    apply_data_event(
+        &mut forged,
+        TOPIC_CODE_UPDATE,
+        &json!({"code": c_starter, "language": "c", "starterCode": ""}),
+        99.0,
+    );
+    assert!(
+        !code_written(&forged),
+        "a packet cannot make the starter count as written"
+    );
+
+    // Switching back restores the candidate's buffer, which is still their work
+    // measured against the first template, not a new template.
+    let solution = starter.replace("pass", "return sorted(nums)[0]");
+    code(&mut switched, &solution, "python");
+    assert!(code_written(&switched), "a tab round trip keeps the work");
+
+    // A switch with no buffer is not a switch: it would leave the old
+    // language's code filed under a language with no starter to measure it by.
+    let mut bare_switch = RuntimeState::default();
+    code(&mut bare_switch, starter, "python");
+    apply_data_event(
+        &mut bare_switch,
+        TOPIC_CODE_UPDATE,
+        &json!({"language": "cpp"}),
+        99.0,
+    );
+    assert_eq!(bare_switch.language, "python");
+    assert!(!code_written(&bare_switch));
+
+    // Emptying the editor and pasting a solution is work too.
+    let mut pasted = RuntimeState::default();
+    code(&mut pasted, starter, "python");
+    code(&mut pasted, "", "python");
+    code(&mut pasted, &solution, "python");
+    assert!(
+        code_written(&pasted),
+        "a paste into a cleared editor is work"
+    );
 }
 
 /// The default language is not a choice the candidate made. Told otherwise, a
@@ -1536,7 +1716,7 @@ fn framework_evaluation_scenarios_exercise_reactions_evidence_and_reports() {
             "{id} does not check interviewer behavior"
         );
 
-        let mut state = RuntimeState::default();
+        let mut state = with_written_code(RuntimeState::default());
         let evidence = case["evidence"].as_array().expect("evidence is an array");
         assert!(evidence.len() <= MAX_FRAMEWORK_EVIDENCE);
         let round_gate = case["reaction"]["kind"] == "round_gate";
@@ -2329,7 +2509,7 @@ fn round_transition_is_one_shot_plan_scoped_and_evidence_gated() {
             .generate_reply
             .is_none()
     );
-    let mut complete = near_time_up(RuntimeState::default());
+    let mut complete = near_time_up(with_written_code(RuntimeState::default()));
     past_the_coding_round(&mut complete);
     for phase in ["test", "optimizations"] {
         record_framework_evidence(&mut complete, &json!({"phase":phase,"source":"candidate_speech","kind":"observed","confidence":90,"summary":format!("candidate completed {phase}")})).unwrap();
@@ -2387,7 +2567,7 @@ fn coding_only_prompt_removes_the_behavioral_round_contract() {
 
 #[test]
 fn framework_evidence_is_server_stamped_validated_deduplicated_and_capped() {
-    let mut state = RuntimeState::default();
+    let mut state = with_written_code(RuntimeState::default());
     state.started_at -= std::time::Duration::from_millis(25);
     let direct = json!({
         "phase":"algorithm", "source":"candidate_speech", "kind":"observed",
@@ -2457,7 +2637,7 @@ fn the_evidence_cap_never_evicts_a_phases_only_observation() {
     // A phase holding one real observation beside a skip has one row that
     // counts: the round gates read non-skipped rows only. Evicting it reports a
     // finished round as incomplete and refuses the interviewer its own ending.
-    let mut mixed = RuntimeState::default();
+    let mut mixed = with_written_code(RuntimeState::default());
     record_framework_evidence(
         &mut mixed,
         &json!({
@@ -2492,7 +2672,7 @@ fn the_evidence_cap_never_evicts_a_phases_only_observation() {
         "the skip beside it made the observation look expendable"
     );
 
-    let mut state = RuntimeState::default();
+    let mut state = with_written_code(RuntimeState::default());
     for phase in ["repeat", "example", "algorithm", "test", "optimizations"] {
         record_framework_evidence(
             &mut state,
@@ -2690,7 +2870,7 @@ fn complete_partial_and_skipped_framework_sessions_remain_distinct() {
         "action",
         "result",
     ];
-    let mut complete = RuntimeState::default();
+    let mut complete = with_written_code(RuntimeState::default());
     for phase in phases {
         record_framework_evidence(
             &mut complete,
@@ -3645,6 +3825,7 @@ fn browser_code_packets_drive_the_authoritative_buffer() {
         state.code, sent,
         "a keystroke packet did not reach the buffer"
     );
+
     assert!(
         result.update_last_code_change,
         "a packet that moved the text has to count as a code change"
@@ -4643,6 +4824,21 @@ fn generated_problem_metadata_exposes_no_private_rubric() {
             problem.id
         );
         assert_eq!(public["title"].as_str(), Some(variant.title));
+
+        // The server's starters are the page's, language for language: written
+        // code is measured against the copy the browser never sends.
+        let served = public["starterCode"]
+            .as_object()
+            .expect("browser problem has starters");
+        assert_eq!(served.len(), variant.starters.len(), "{}", problem.id);
+        for (language, code) in variant.starters {
+            assert_eq!(
+                served[*language].as_str(),
+                Some(*code),
+                "{} {language}",
+                problem.id
+            );
+        }
         assert!(
             !names_source(problem, &text),
             "{} names its source problem",
@@ -5196,7 +5392,7 @@ fn control_events_respect_the_end_and_report_what_they_did() {
     };
     let transition = json!({"type": "round_transition", "round": "behavioral"});
 
-    let mut one_phase = RuntimeState::default();
+    let mut one_phase = with_written_code(RuntimeState::default());
     past_the_coding_round(&mut one_phase);
     record_framework_evidence(&mut one_phase, &evidence("test")).expect("records");
     let result = apply_data_event(&mut one_phase, TOPIC_CONTROL, &transition, 99.0);
@@ -5221,7 +5417,7 @@ fn control_events_respect_the_end_and_report_what_they_did() {
     );
     assert!(!unrelated.behavioral_round_started);
 
-    let mut both = RuntimeState::default();
+    let mut both = with_written_code(RuntimeState::default());
     past_the_coding_round(&mut both);
     for phase in ["test", "optimizations"] {
         record_framework_evidence(&mut both, &evidence(phase)).expect("records");

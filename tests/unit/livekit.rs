@@ -104,6 +104,11 @@ fn the_interview_begins_from_the_plan_it_was_booked_with() {
     assert_eq!(state.coding_minutes, boot.coding_minutes);
     assert_eq!(state.behavioral_minutes, boot.behavioral_minutes);
     assert_eq!(state.hint_ladder, boot.problem.variant().hints);
+    assert_eq!(
+        state.code_templates.len(),
+        boot.problem.variant().starters.len(),
+        "every language's starter is seeded from the problem"
+    );
 }
 
 /// Closing a turn yields what to publish, once, and only for an open one.
@@ -767,6 +772,7 @@ fn execute_tool_call_reads_editor_and_tracks_hints() {
 fn end_interview_allows_a_completed_coding_only_plan() {
     let mut state = RuntimeState {
         interview_loop: crate::agent::InterviewLoop::CodingOnly,
+        code: "def solve(nums):\n    return sorted(nums)\n".to_string(),
         ..RuntimeState::default()
     };
     for phase in ["test", "optimizations"] {
