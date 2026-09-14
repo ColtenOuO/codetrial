@@ -408,6 +408,37 @@ class VariantValidationTests(unittest.TestCase):
         self.assertEqual(GEN.rust_str("10\u2264n"), '"10\\u{2264}n"')
 
 
+class ThresholdBoundaryTests(unittest.TestCase):
+    """Each tuned threshold on both sides of its boundary."""
+
+    def test_an_argument_is_recognisable_from_four_values_or_five_characters(self):
+        self.assertEqual(GEN.RECOGNISABLE_VALUES, 4)
+        self.assertEqual(GEN.RECOGNISABLE_CHARS, 5)
+        self.assertEqual(GEN.example_arguments("nums = [1,2,3], k = 2"), [])
+        self.assertEqual(
+            GEN.example_arguments("nums = [1,2,3,4], k = 2"), [(1.0, 2.0, 3.0, 4.0)]
+        )
+        self.assertEqual(GEN.example_arguments('s = "abcd"'), [])
+        self.assertEqual(GEN.example_arguments('s = "abcde"'), [("abcde",)])
+
+    def test_prose_quotes_from_the_same_boundaries(self):
+        # Three numbers are an illustration, four are a quote.
+        self.assertFalse(GEN.quotes_example((7.0, 8.0, 9.0), "Try 7, 8, 9."))
+        self.assertTrue(GEN.quotes_example((6.0, 7.0, 8.0, 9.0), "Try 6, 7, 8, 9."))
+        # Reordered only with three distinct values.
+        self.assertTrue(GEN.quotes_example((6.0, 7.0, 8.0, 6.0), "Try 8, 6, 7, 6."))
+        self.assertFalse(GEN.quotes_example((6.0, 7.0, 7.0, 6.0), "Try 7, 6, 6, 7."))
+        # With two distinct values, in order only from five.
+        self.assertFalse(GEN.quotes_example((6.0, 7.0, 7.0, 6.0), "Try 6, 7, 7, 6."))
+        self.assertTrue(
+            GEN.quotes_example((6.0, 7.0, 7.0, 6.0, 6.0), "Try 6, 7, 7, 6, 6.")
+        )
+        # Strings from five characters, as whole words.
+        self.assertFalse(GEN.quotes_example(("abcd",), "Line up abcd."))
+        self.assertTrue(GEN.quotes_example(("abcde",), "Line up abcde."))
+        self.assertFalse(GEN.quotes_example(("abcde",), "Line up xabcde."))
+
+
 class GuideValidationTests(unittest.TestCase):
     """The reviewer's notes, held to the rules the import used to be trusted with."""
 

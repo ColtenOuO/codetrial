@@ -2,7 +2,7 @@
 //! Everything here reaches into `src/agent.rs` through `super`, so private
 //! items are in scope.
 
-use super::added_characters;
+use super::{MIN_WRITTEN_CHARS, RuntimeState, added_characters, code_written};
 
 fn count(template: &str, code: &str) -> usize {
     let template = template.chars().collect::<Vec<_>>();
@@ -47,4 +47,31 @@ fn added_characters_stops_counting_exactly_past_its_table() {
     assert_eq!(count(&"a".repeat(1000), &"b".repeat(5000)), 4000);
     // At the bound the count is still exact.
     assert_eq!(count(&"a".repeat(1000), &"b".repeat(4000)), 4000);
+}
+
+/// The written-code threshold on both sides: four added characters are a
+/// keystroke or two, five are the shortest answers the bank's starters take.
+#[test]
+fn code_written_starts_at_five_added_characters() {
+    assert_eq!(MIN_WRITTEN_CHARS, 5);
+    let written = |template: &str, code: &str| {
+        code_written(&RuntimeState {
+            code: code.to_string(),
+            code_templates: [("python".to_string(), template.to_string())].into(),
+            ..RuntimeState::default()
+        })
+    };
+    assert!(!written("return 0", "return 0"));
+    assert!(
+        !written("return 0", "return x+yz0"),
+        "four characters added in order"
+    );
+    assert!(
+        written("return 0", "return xy+yz0"),
+        "five characters added in order"
+    );
+
+    // Shorter than its starter, so the length proves nothing and the table
+    // decides: the comment went and a real answer came.
+    assert!(written("pass # think", "return a*b"));
 }

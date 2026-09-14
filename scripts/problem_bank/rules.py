@@ -90,9 +90,17 @@ def spells(name: str, text: str) -> bool:
 
 # How much of a published example is recognisable on its own: this many values,
 # or one string this long. Both the published-case check and the prose check
-# read these, so the two agree on what counts.
+# read these, so the two agree on what counts. Tuned against the bank rather
+# than derived: three values collide with ordinary illustrations such as "2, 3
+# and 4", and four-letter words such as "must" are prose. The tests pin each
+# boundary, so moving one is a decision the diff shows.
 RECOGNISABLE_VALUES = 4
 RECOGNISABLE_CHARS = 5
+# Prose may reorder a quoted input only once it holds this many distinct values,
+# and with fewer it must run this long in the published order: a board of 0s
+# and 1s is spelled by any sentence about 0s and 1s.
+REORDERED_DISTINCT_VALUES = 3
+ORDERED_RUN_VALUES = 5
 
 
 @functools.cache
@@ -150,12 +158,12 @@ def quotes_example(example: tuple, text: str) -> bool:
     numbers = tuple(value for value in example if isinstance(value, float))
     if len(numbers) >= RECOGNISABLE_VALUES:
         spoken = spoken_numbers(text)
-        distinct = len(set(numbers)) >= 3
+        distinct = len(set(numbers)) >= REORDERED_DISTINCT_VALUES
         for at in range(len(spoken) - len(numbers) + 1):
             window = spoken[at : at + len(numbers)]
-            if (window == numbers and (distinct or len(numbers) >= 5)) or (
-                distinct and sorted(window) == sorted(numbers)
-            ):
+            if (
+                window == numbers and (distinct or len(numbers) >= ORDERED_RUN_VALUES)
+            ) or (distinct and sorted(window) == sorted(numbers)):
                 return True
     return any(
         isinstance(value, str)
