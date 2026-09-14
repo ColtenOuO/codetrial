@@ -26,7 +26,7 @@ pub fn shared_run(left: &str, right: &str) -> usize {
 
 /// Lowercase ASCII words, split on anything that is not a letter or a digit
 /// and inside identifiers where their case changes, the way `spelled_words` in
-/// scripts/gen-problems.py splits them: `minStackCreate` is min, stack,
+/// scripts/problem_bank/rules.py splits them: `minStackCreate` is min, stack,
 /// create, and `LRUCache` is lru, cache.
 pub fn words(text: &str) -> Vec<String> {
     let characters = text.chars().collect::<Vec<_>>();
@@ -59,8 +59,8 @@ pub fn words(text: &str) -> Vec<String> {
 }
 
 /// Whether `text` names a published problem by its title: the rule
-/// `names_source` in scripts/gen-problems.py applies, so the generator, the
-/// prompt tests and the behaviour check agree.
+/// `names_source` in scripts/problem_bank/rules.py applies, so the generator,
+/// the prompt tests and the behaviour check agree.
 ///
 /// A title that is a single ordinary word, "Candy" or "Triangle", is exempt,
 /// because a scenario uses the word. Any other title counts when a run of

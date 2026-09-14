@@ -3,7 +3,6 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,12 +15,6 @@ SPEC.loader.exec_module(GEN)
 
 
 class ProblemMetadataGeneratorTests(unittest.TestCase):
-    def source_with(self, problems):
-        temporary = tempfile.TemporaryDirectory()
-        path = Path(temporary.name) / "problems.json"
-        path.write_text(json.dumps(problems))
-        return temporary, patch.object(GEN, "SOURCE", path)
-
     def test_rejects_duplicate_ids_and_invalid_topic_lists(self):
         valid = {"id": "one", "difficulty": "Easy", "topics": ["Array"]}
         for problems in (
@@ -30,9 +23,12 @@ class ProblemMetadataGeneratorTests(unittest.TestCase):
             [{**valid, "topics": ["Array", "Array"]}],
             [{**valid, "difficulty": "Extreme"}],
         ):
-            temporary, source = self.source_with(problems)
-            with temporary, source, self.assertRaises(RuntimeError):
-                GEN.validated_problems()
+            # Handed in by path: the gate runs these cases on a thread pool.
+            with tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "problems.json"
+                path.write_text(json.dumps(problems))
+                with self.assertRaises(RuntimeError):
+                    GEN.validated_problems(path)
 
     def test_public_projection_has_a_closed_schema_and_ordered_stages(self):
         problem = {

@@ -19,7 +19,7 @@ test("top interview manifest records 150 unique slugs grouped by topic", async (
 });
 
 test("leetcode fetcher never asks GraphQL for statement prose", async () => {
-  const source = await readFile(repoFile("scripts/gen-problems.py"), "utf8");
+  const source = await readFile(repoFile("scripts/problem_bank/bank.py"), "utf8");
   // Only the query text matters. Scanning the whole file for "content" fails the
   // build the day someone writes the word in a comment.
   const query = source.match(/DETAIL_QUERY = """([\s\S]*?)"""/)?.[1];
