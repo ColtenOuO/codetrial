@@ -48,10 +48,15 @@ def candidate_problem(entry: dict) -> dict:
 
 
 def rust_str(text: str) -> str:
-    """A Rust string literal. JSON escapes are not all Rust escapes."""
+    """A Rust string literal. JSON escapes are not all Rust escapes.
+
+    Every character outside printable ASCII is escaped, control characters
+    included: a carriage return or a tab written literally is still a string,
+    but other controls can stop the generated table compiling.
+    """
     escaped = "".join(
         {"\\": "\\\\", '"': '\\"', "\n": "\\n"}.get(character, character)
-        if character.isascii()
+        if character.isascii() and (character.isprintable() or character == "\n")
         else f"\\u{{{ord(character):x}}}"
         for character in text
     )

@@ -422,6 +422,7 @@ class VariantValidationTests(unittest.TestCase):
     def test_rust_literals_survive_quotes_backslashes_and_non_ascii(self):
         self.assertEqual(GEN.rust_str('say "hi" \\ go'), '"say \\"hi\\" \\\\ go"')
         self.assertEqual(GEN.rust_str("10\u2264n"), '"10\\u{2264}n"')
+        self.assertEqual(GEN.rust_str("a\rb\tc\x07"), '"a\\u{d}b\\u{9}c\\u{7}"')
 
 
 class ThresholdBoundaryTests(unittest.TestCase):
