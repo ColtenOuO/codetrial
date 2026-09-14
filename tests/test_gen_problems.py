@@ -425,6 +425,99 @@ class VariantValidationTests(unittest.TestCase):
         self.assertEqual(GEN.rust_str("a\rb\tc\x07"), '"a\\u{d}b\\u{9}c\\u{7}"')
 
 
+class RuleStepTests(unittest.TestCase):
+    """The named steps of validated_variant, each on its own inputs."""
+
+    problem = VariantValidationTests.problem
+    judge = VariantValidationTests.judge
+    variant = VariantValidationTests.variant
+
+    def posed(self):
+        return GEN.posed(self.problem, self.judge, self.variant)
+
+    def test_checked_text_returns_the_spoken_fields_and_refuses_extra_keys(self):
+        text = GEN.checked_text("coin-change", self.variant)
+        self.assertEqual(text["title"], "Kiosk Token Payout")
+        self.assertEqual(text["hints"], self.variant["hints"])
+        self.assertEqual(
+            set(text), {"title", "brief", "contract", "follow_ups", "hints"}
+        )
+        with self.assertRaisesRegex(RuntimeError, "a variant has exactly"):
+            GEN.checked_text("coin-change", {**self.variant, "extra": 1})
+        with self.assertRaisesRegex(RuntimeError, "a variant has exactly"):
+            GEN.checked_text("coin-change", ["not", "a", "dict"])
+
+    def test_check_new_names_passes_new_names_and_refuses_the_wrong_kind(self):
+        GEN.check_new_names(self.problem, self.judge, self.variant)
+        with self.assertRaisesRegex(RuntimeError, "declares a new entry"):
+            GEN.check_new_names(
+                self.problem, self.judge, {**self.variant, "className": "KioskPayout"}
+            )
+        with self.assertRaisesRegex(RuntimeError, "is not a new name"):
+            GEN.check_new_names(
+                self.problem, self.judge, {**self.variant, "entry": "coin_change"}
+            )
+
+    def test_check_entry_named_needs_the_brief_and_every_starter(self):
+        shipped, graded = self.posed()
+        GEN.check_entry_named("coin-change", self.variant["brief"], shipped, graded)
+        with self.assertRaisesRegex(RuntimeError, "brief never names fewestTokens"):
+            GEN.check_entry_named("coin-change", ["Pay it out."], shipped, graded)
+        broken = {**shipped, "starterCode": {**shipped["starterCode"], "c": "int f();"}}
+        with self.assertRaisesRegex(RuntimeError, "c starter does not define"):
+            GEN.check_entry_named("coin-change", self.variant["brief"], broken, graded)
+
+    def test_published_cases_finds_the_published_case_and_what_prose_may_not_quote(
+        self,
+    ):
+        quotable, published = GEN.published_cases(self.problem, self.judge)
+        self.assertEqual(published, {0}, "only [1,2,5] with 11 is published")
+        self.assertIn((1.0, 2.0, 5.0, 11.0), quotable)
+
+    def test_rendered_examples_show_the_judge_case_in_the_posed_names(self):
+        _, graded = self.posed()
+        examples, shown = GEN.rendered_examples(self.problem, self.variant, graded)
+        self.assertEqual(shown, {1})
+        self.assertEqual(
+            examples, [{"input": "tokens = [5,7], amount = 1", "output": "-1"}]
+        )
+        with self.assertRaisesRegex(
+            RuntimeError, r"examples\[0\] names one judge case"
+        ):
+            GEN.rendered_examples(
+                self.problem, {**self.variant, "examples": [{"case": 9}]}, graded
+            )
+
+    def test_validated_variants_needs_every_problem_once_in_bank_order(self):
+        problems = [self.problem]
+        judges = {"coin-change": self.judge}
+        validated = GEN.validated_variants(
+            problems, judges, {"coin-change": self.variant}
+        )
+        self.assertEqual(list(validated), ["coin-change"])
+        self.assertIs(validated["coin-change"]["variant"], self.variant)
+        with self.assertRaisesRegex(RuntimeError, "every problem once, in bank order"):
+            GEN.validated_variants(problems, judges, {})
+        with self.assertRaisesRegex(RuntimeError, "keyed by problem id"):
+            GEN.validated_variants(problems, judges, [self.variant])
+
+    def test_rust_variants_writes_every_field_the_server_reads(self):
+        entry = GEN.validated_variant(self.problem, self.judge, self.variant)
+        table = GEN.rust_variants(
+            [self.problem], {"coin-change": {**entry, "variant": self.variant}}
+        )
+        for field in (
+            'title: "Kiosk Token Payout"',
+            'page: "kiosk-token-payout"',
+            "clarifications: &[(",
+            "follow_ups: &[",
+            "hints: &[",
+            'starters: &[("python", "class Solution:',
+        ):
+            self.assertIn(field, table)
+        self.assertNotIn("coinChange", table, "the table carries the posed names")
+
+
 class ThresholdBoundaryTests(unittest.TestCase):
     """Each tuned threshold on both sides of its boundary."""
 
@@ -535,8 +628,7 @@ class PageNameTests(unittest.TestCase):
         # Checkers ship in every judge and are this project's own names, so
         # they are named for what they compare rather than for a problem.
         titles = {
-            # The bank by path, not `GEN.SOURCE`: another case patches that
-            # module global while this one may be running on the pool.
+            # The bank by path: the gate runs these cases on a thread pool.
             GEN.camel_words(problem["title"])
             for problem in GEN.read_json(ROOT / "problem-bank" / "problems.json")
         }

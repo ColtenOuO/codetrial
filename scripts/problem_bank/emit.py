@@ -16,6 +16,7 @@ from .bank import (
     RUST_GUIDES,
     RUST_TOPICS,
     RUST_VARIANTS,
+    VARIANT_SOURCE,
     public_metadata,
     read_json,
     validated_problems,
@@ -140,7 +141,9 @@ def generated() -> dict[Path, str]:
     """Every file this script owns, as path -> exact contents."""
     files: dict[Path, str] = {}
     problems = validated_problems()
-    variants = validated_variants(problems, read_json(JUDGE_SOURCE))
+    variants = validated_variants(
+        problems, read_json(JUDGE_SOURCE), read_json(VARIANT_SOURCE)
+    )
     # Every consumer that has an id and wants the page or the title reads this
     # map, rather than rebuilding it from the pages or re-deriving the slug.
     # Only the paths that start from a published id or name fetch it: an old

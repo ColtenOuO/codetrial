@@ -9,7 +9,6 @@ import re
 from .bank import (
     GUIDE_SOURCE,
     VARIANT_KEYS,
-    VARIANT_SOURCE,
     compact,
     named,
     read_json,
@@ -595,8 +594,11 @@ def validated_variant(problem: dict, judge: dict, variant: object) -> dict:
     return {"problem": shipped, "judge": graded, "examples": examples}
 
 
-def validated_variants(problems: list[dict], judges: dict) -> dict:
-    variants = read_json(VARIANT_SOURCE)
+def validated_variants(problems: list[dict], judges: dict, variants: object) -> dict:
+    """Every problem's variant, in bank order, each validated against its judge.
+
+    `variants` is the parsed bank file, handed in like the judges.
+    """
     if not isinstance(variants, dict):
         raise RuntimeError("variants must be a JSON object keyed by problem id")
     ids = [problem["id"] for problem in problems]
