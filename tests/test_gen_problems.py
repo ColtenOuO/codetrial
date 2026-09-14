@@ -263,6 +263,42 @@ class VariantValidationTests(unittest.TestCase):
             GEN.input_values("root = [1,2,null,3]"), GEN.input_values("root = [1,2,3]")
         )
 
+    def test_prose_may_not_walk_through_a_published_example(self):
+        # The published example here is coins 1, 2, 5 and amount 11.
+        self.rejects(
+            "repeats a published example",
+            hints=["Try 1, 2, 5 and 11 by hand.", "b", "c"],
+        )
+        self.rejects(
+            "repeats a published example",
+            followUps=["What about 11 with 5, 2 and 1?", "b"],
+        )
+        GEN.validated_variant(
+            self.problem,
+            self.judge,
+            {**self.variant, "hints": ["Try 1, 2, 4 and 11 by hand.", "b", "c"]},
+        )
+        self.assertTrue(
+            GEN.quotes_example(("paper", "title"), "Line up paper and title.")
+        )
+        self.assertFalse(
+            GEN.quotes_example(("paper", "title"), "A newspaper headline.")
+        )
+        # A small board of 0s and 1s is not quoted by an output of 0s and 1s, but
+        # a longer run of few values in the published order is.
+        board = (1.0, 1.0, 1.0, 0.0)
+        self.assertFalse(
+            GEN.quotes_example(board, "board becomes [[0,0,0],[1,1,1],[0,0,0]]")
+        )
+        self.assertTrue(
+            GEN.quotes_example((3.0, 2.0, 2.0, 3.0, 3.0), "Take 3, 2, 2, 3 with 3.")
+        )
+        # An example's own output text is read like any other prose.
+        self.rejects(
+            "repeats a published example",
+            examples=[{"case": 1, "output": "-1, unlike 1, 2, 5 and 11"}],
+        )
+
     def test_a_published_argument_is_published_whatever_comes_with_it(self):
         self.assertEqual(
             GEN.example_arguments("head = [1,2,3,4,5], k = 2"),

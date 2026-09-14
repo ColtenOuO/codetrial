@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import re
 import sys
@@ -602,6 +603,11 @@ RECOGNISABLE_VALUES = 4
 RECOGNISABLE_CHARS = 5
 
 
+@functools.cache
+def spoken_numbers(text: str) -> tuple:
+    return tuple(value for value in input_values(text) if isinstance(value, float))
+
+
 def example_arguments(text: str) -> list[tuple]:
     """The values of each argument a published example names, one tuple apiece.
 
@@ -636,6 +642,35 @@ def example_arguments(text: str) -> list[tuple]:
             and len(values[0]) >= RECOGNISABLE_CHARS
         )
     ]
+
+
+def quotes_example(example: tuple, text: str) -> bool:
+    """Whether prose repeats a published example's input.
+
+    A hint that walks "3, 0, 6, 1, 5" or lines up "paper and title" hands the
+    candidate the published example the page no longer shows. It takes four
+    numbers or more holding three distinct values, in any order, since "[1, 6],
+    [2, 8], [7, 12] and [10, 16]" is the same input sorted; with fewer distinct
+    values only five or more in the published order count, so an output of 0s
+    and 1s is not taken for a published board. A string counts from five
+    characters, and only as a whole word.
+    """
+    numbers = tuple(value for value in example if isinstance(value, float))
+    if len(numbers) >= RECOGNISABLE_VALUES:
+        spoken = spoken_numbers(text)
+        distinct = len(set(numbers)) >= 3
+        for at in range(len(spoken) - len(numbers) + 1):
+            window = spoken[at : at + len(numbers)]
+            if (window == numbers and (distinct or len(numbers) >= 5)) or (
+                distinct and sorted(window) == sorted(numbers)
+            ):
+                return True
+    return any(
+        isinstance(value, str)
+        and len(value) >= RECOGNISABLE_CHARS
+        and re.search(rf"(?<![\w-]){re.escape(value)}(?![\w-])", text)
+        for value in example
+    )
 
 
 def sized(problem_id: str, where: str, value: object, low: int, high: int) -> list:
@@ -772,8 +807,8 @@ def validated_variant(problem: dict, judge: dict, variant: object) -> dict:
     # this rather than from the published statement, which names the problem
     # as often as it states it.
     contract = spoken_text(problem_id, "contract", variant["contract"])
-    text_list(problem_id, "followUps", variant["followUps"], 2, 3)
-    text_list(problem_id, "hints", variant["hints"], 3, 3)
+    follow_ups = text_list(problem_id, "followUps", variant["followUps"], 2, 3)
+    hints = text_list(problem_id, "hints", variant["hints"], 3, 3)
     for at, item in enumerate(
         sized(problem_id, "clarifications", variant["clarifications"], 3, 6)
     ):
@@ -928,6 +963,29 @@ def validated_variant(problem: dict, judge: dict, variant: object) -> dict:
         if names_source(problem["title"], shown_text):
             raise RuntimeError(f"{problem_id}: examples[{at}] names the source title")
         examples.append(rendered)
+    prose = [
+        *brief,
+        contract,
+        *follow_ups,
+        *hints,
+        *(
+            text
+            for item in variant["clarifications"]
+            for text in (item["question"], item["answer"])
+        ),
+        *(
+            example[key]
+            for example in variant["examples"]
+            for key in ("output", "explanation")
+            if key in example
+        ),
+    ]
+    for quoted in published_inputs | published_arguments:
+        for text in prose:
+            if quotes_example(quoted, text):
+                raise RuntimeError(
+                    f"{problem_id}: {text[:60]!r} repeats a published example"
+                )
     # The published examples are the most recognisable thing about a problem:
     # "pwwkew" or "paper" and "title" name it as surely as the title does. None
     # of them is shown, so a judge built only from them needs a case of its own.

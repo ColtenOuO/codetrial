@@ -184,7 +184,7 @@
       "What if the kept alerts must preserve their original order?"
     ],
     "hints": [
-      "Take the buffer 3, 2, 2, 3 with code 3 muted. Where should the first alert you keep end up?",
+      "Take the buffer 5, 1, 5, 5, 2 with code 5 muted. Where should the first alert you keep end up?",
       "Can you think of the front of the buffer as a growing region of alerts you have already decided to keep, separate from the part you are still reading?",
       "When you read an alert that is not muted, where exactly does it go, and what tells you how many you have kept when the scan ends?"
     ]
@@ -328,7 +328,7 @@
       "What if we want every version reported by more than a third of the replicas?"
     ],
     "hints": [
-      "In the reports 2, 2, 1, 1, 1, 2, 2, how many reports back the winning version, and how does that compare with all the other reports put together?",
+      "In the reports 4, 7, 4, 4, 7, 4, how many reports back the winning version, and how does that compare with all the other reports put together?",
       "Why can the majority version never be completely cancelled out if every cancellation removes one majority report and one other report?",
       "If you keep only one current candidate and a running tally, what should happen to the tally when a report agrees, when it disagrees, and when the tally hits zero?"
     ]
@@ -459,7 +459,7 @@
       "The reseller wants the list of buy and sell days, not just the total. How would you produce it?"
     ],
     "hints": [
-      "Try prices 1, 2, 3, 4, 5. Is one long hold better, worse, or the same as selling and rebuying each day?",
+      "Try prices 3, 4, 6, 7, 9. Is one long hold better, worse, or the same as selling and rebuying each day?",
       "Can any profitable plan be broken down into day-to-day price moves, and which of those moves would you want to be holding for?",
       "Looking at just two consecutive days, when does holding across them help, and when does it hurt?"
     ]
@@ -508,7 +508,7 @@
       "Some relays are marked as down and cannot be used as landing points. How would you incorporate that?"
     ],
     "hints": [
-      "In 3, 2, 1, 0, 4, which relays can the message ever land on, and why does the last one stay out of reach?",
+      "In 2, 1, 1, 0, 3, which relays can the message ever land on, and why does the last one stay out of reach?",
       "Instead of tracking every path, what single quantity summarizes all the relays the message could have reached so far?",
       "As you move relay by relay, how do you tell that the relay you are on could never have received the message, and how does each reachable relay change your summary?"
     ]
@@ -598,7 +598,7 @@
       "Some maintainers have millions of packages with small counts. Can you avoid sorting entirely?"
     ],
     "hints": [
-      "For the counts 3, 0, 6, 1, 5, check a candidate score of 3 and then 4. What does each check require?",
+      "For the counts 2, 7, 0, 4, 5, check a candidate score of 3 and then 4. What does each check require?",
       "If you lined the packages up from most to fewest dependents, what would the position of each package tell you about the scores it can support?",
       "In that lineup, what comparison between a package's count and its position tells you the score is still achievable, and where does it stop being true?"
     ]
@@ -1368,7 +1368,7 @@
       "The price list is too large to load and can only be read through a paged API that supports reading from either end. Does your approach still work?"
     ],
     "hints": [
-      "Try prices 2, 3 and 4 with a card worth 6. Which pairs can you rule out without trying every combination, knowing the list is in price order?",
+      "Try prices 1, 4 and 6 with a card worth 7. Which pairs can you rule out without trying every combination, knowing the list is in price order?",
       "If the cheapest item plus the most expensive item comes in under the card value, is there any pair involving that cheapest item that could still work?",
       "After a total comes out too high or too low, which single end do you give up on, and how do you convert the positions where you stop into the numbering the caller expects?"
     ]
@@ -1599,7 +1599,7 @@
       "Security now tolerates exactly one corrupted chunk in a block. How would you adapt?"
     ],
     "hints": [
-      "With chunks foo and bar in the payload barfoothefoobarman, how long must a matching block be, and what do you see if you cut a candidate block into chunk-sized pieces?",
+      "With chunks ab and cd in the payload cdabxxabcd, how long must a matching block be, and what do you see if you cut a candidate block into chunk-sized pieces?",
       "Starting offsets that differ by exactly one chunk length cut the payload into the same pieces. What could one pass over those offsets share instead of rebuilding each block from scratch?",
       "As you move along one chunk at a time, what do you do when a piece is not a listed code at all, and what do you do when you now hold one copy too many of a code?"
     ]
@@ -1644,7 +1644,7 @@
       "Files arrive continuously. How would you report the shortest qualifying batch among the most recent files?"
     ],
     "hints": [
-      "With a threshold of 7 and sizes 2, 3, 1, 2, 4, 3, add files from the start until you reach 7. Once you have, is there any point in adding more to that batch?",
+      "With a threshold of 9 and sizes 4, 1, 2, 5, 3, 3, add files from the start until you reach 9. Once you have, is there any point in adding more to that batch?",
       "Every size is positive. What does that guarantee about the total when you drop a file from the front of a batch or add one at the back?",
       "When your current batch meets the threshold, what do you record, which end do you change, and how long do you keep doing that before adding the next file?"
     ]
@@ -1970,7 +1970,7 @@
       "Characters can now be full Unicode code points. What changes?"
     ],
     "hints": [
-      "Line up paper and title one position at a time. What does each pair tell you about the substitution, and what would count as a contradiction?",
+      "Line up moon and seek one position at a time. What does each pair tell you about the substitution, and what would count as a contradiction?",
       "Is it enough to check that each original character always turns into the same replacement, or can a contradiction come from the replacement side as well?",
       "What would you record the first time you see an original paired with a replacement, so that a later pair that disagrees in either direction is caught right away?"
     ]
@@ -2147,7 +2147,7 @@
       "The window is now defined by timestamps, such as within ten minutes, instead of positions. How would you adapt?"
     ],
     "hints": [
-      "Take the fingerprints 1, 2, 3, 1, 2, 3 with a distance of 2. For each transaction, which earlier transactions could possibly matter?",
+      "Take the fingerprints 5, 8, 9, 5, 8 with a distance of 2. For each transaction, which earlier transactions could possibly matter?",
       "When a fingerprint shows up again, which of its earlier appearances is the only one worth comparing against?",
       "What would you store for each fingerprint as you walk the feed, and do you compare the distance before or after refreshing what you stored?"
     ]
@@ -2189,7 +2189,7 @@
       "The export is too large for one machine. How would you compute the answer across several?"
     ],
     "hints": [
-      "In the export 100, 4, 200, 1, 3, 2, how can you tell that 1 is the start of a block and 3 is not?",
+      "In the export 50, 6, 90, 3, 5, 4, how can you tell that 3 is the start of a block and 5 is not?",
       "If you could ask instantly whether any given number is allocated, which numbers would be worth starting a count from?",
       "Counting upward only from numbers whose predecessor is not allocated, how do you keep repeated values from lengthening or restarting a block?"
     ]
@@ -2335,7 +2335,7 @@
       "Suppose one check can only cover at most c services before it times out. How does that change the problem?"
     ],
     "hints": [
-      "Try the windows [1, 6], [2, 8], [7, 12] and [10, 16] by hand. Where would you fire the first check, and what made that spot a good choice?",
+      "Try the windows [1, 4], [3, 9], [5, 7] and [8, 11] by hand. Where would you fire the first check, and what made that spot a good choice?",
       "Some service has to be covered by a check that fires no later than the moment its window closes. Which service is that most urgent for, and what order of looking at the windows does that suggest?",
       "If the check for that most urgent window fires at the very last moment the window allows, what single comparison then tells you whether the next window is already covered or needs a new check?"
     ]
@@ -2811,7 +2811,7 @@
       "Batch sizes now vary: you are given a list of sizes to apply in turn. How would you adapt?"
     ],
     "hints": [
-      "Take the queue 1, 2, 3, 4, 5 with batches of two. After the first batch is flipped, which node must the start of the queue point to, and what must the old first frame point to?",
+      "Take the queue 6, 7, 8, 9 with batches of two. After the first batch is flipped, which node must the start of the queue point to, and what must the old first frame point to?",
       "Before flipping a batch, how do you make sure it is actually full, and what do you need to remember about the frames on either side of it?",
       "Once a batch is flipped, which node becomes the one just before the next batch, and how does keeping track of that node let you repeat the same step?"
     ]
@@ -2898,7 +2898,7 @@
       "Can you do this with constant extra memory while relinking the existing nodes?"
     ],
     "hints": [
-      "Try the chain 1, 1, 1, 2, 3 by hand. When you discover that 1 is repeated, which node should end up as the new head?",
+      "Try the chain 4, 4, 6, 7 by hand. When you discover that 4 is repeated, which node should end up as the new head?",
       "Since equal IDs sit next to each other, how can you tell whether the run you are looking at has length one before deciding to keep it?",
       "Which node do you need to hold on to so you can skip a whole repeated run, and when is it safe to move that node forward?"
     ]
@@ -3122,7 +3122,7 @@
       "Children are now unordered, so swapping left and right does not count as a difference. How does that change the check?"
     ],
     "hints": [
-      "Why is comparing the list of values you get from walking each tree not enough? Try a root 1 with a left child 2 against a root 1 with a right child 2.",
+      "Why is comparing the list of values you get from walking each tree not enough? Try a root 7 with a left child 4 against a root 7 with a right child 4.",
       "If the two roots hold the same value, what has to be true about their left children and their right children for the whole trees to match?",
       "When you compare a pair of positions, what are the possible combinations of empty and non-empty, and what is the answer for each one before you look at values?"
     ]
@@ -3248,7 +3248,7 @@
       "If ids could repeat, what goes wrong, and what extra information would you ask the dumper to write?"
     ],
     "hints": [
-      "Take the logs 3, 9, 20, 15, 7 and 9, 3, 15, 20, 7. Which node must be the root, and which ids belong to its left side?",
+      "Take the logs 8, 4, 2, 12, 14 and 2, 4, 8, 12, 14. Which node must be the root, and which ids belong to its left side?",
       "Once you know the root's position in the second log, what do the pieces on either side tell you, and how many entries of the first log belong to the left subtree?",
       "Finding the root's position in the second log again and again gets slow. What could you prepare once up front, and in what order must you take roots from the first log as you build?"
     ]
@@ -3290,7 +3290,7 @@
       "The cache format could change freely. What single serialization would you choose instead, and why?"
     ],
     "hints": [
-      "With the lists 9, 3, 15, 20, 7 and 9, 15, 7, 20, 3, which node is the root, and which ids sit on each side of it?",
+      "With the lists 2, 4, 8, 12, 14 and 2, 4, 14, 12, 8, which node is the root, and which ids sit on each side of it?",
       "After you pick the root from the second list, which subtree's root appears right before it in that list, and what does that mean for the order you rebuild the two sides?",
       "How will you find a root's position in the first list without searching every time, and what range of that list does each recursive piece cover?"
     ]
@@ -4431,8 +4431,8 @@
     ],
     "clarifications": [
       {
-        "question": "If apple is registered, does search for app return true?",
-        "answer": "No. search is true only for names that were registered exactly; app would need to be registered itself."
+        "question": "If deploy is registered, does search for dep return true?",
+        "answer": "No. search is true only for names that were registered exactly; dep would need to be registered itself."
       },
       {
         "question": "Does a full registered name count as a prefix of itself?",
@@ -4455,7 +4455,7 @@
     "hints": [
       "If car and cat are both registered, what do they have in common, and how could storing that shared part once help a prefix check?",
       "If names that begin the same way shared the same stored path letter by letter, what would a prefix check need to find, and what more would an exact check need?",
-      "After following all the letters of app, what extra fact must you have recorded to tell whether app itself was registered or only apple?"
+      "After following all the letters of dep, what extra fact must you have recorded to tell whether dep itself was registered or only deploy?"
     ]
   },
   "design-add-and-search-words-data-structure": {
@@ -5030,7 +5030,7 @@
       "We now insert thousands of jobs per second. Is a sorted array still the right structure?"
     ],
     "hints": [
-      "Try the times 1, 3, 5, 6 with a new time of 4. Which neighbouring times decide the answer, and do you need to look at the rest?",
+      "Try the times 10, 20, 30, 40 with a new time of 25. Which neighbouring times decide the answer, and do you need to look at the rest?",
       "If you look at one time in the middle, what does comparing it with the new time tell you about which part of the array can still hold the answer?",
       "When you stop narrowing, which boundary holds the answer, and does your rule for moving the boundaries still work when the new time is smaller or larger than every entry?"
     ]
