@@ -18,6 +18,8 @@ from problem_bank.bank import (  # noqa: E402, F401 -- read by main, the tests a
     REACTO_STAGES,
     ROOT,
     SOURCE,
+    invalid_origins,
+    is_imported,
     public_metadata,
     read_json,
     validated_problems,

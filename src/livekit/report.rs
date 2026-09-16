@@ -91,7 +91,12 @@ fn stamp_report_debrief(
 ) {
     let problem = boot.problem;
     let safe = |field: &str, text: &str| {
-        if crate::agent::names_published_problem(problem.title, text) {
+        // The empty title an original problem gives matches no title but still
+        // refuses a practice site, which is what `validate_report_candidate`
+        // already does. Skipping the check for those problems instead would
+        // leave the one kind of exercise this filter cannot speak for.
+        let source_title = problem.source_title().unwrap_or("");
+        if crate::agent::names_published_problem(source_title, text) {
             eprintln!(
                 "codetrial report_debrief_dropped problem={} field={field}",
                 problem.id

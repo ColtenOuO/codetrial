@@ -445,6 +445,80 @@ fn report_carries_the_debrief() {
     assert_eq!(fallback["incomplete"], true);
 }
 
+/// An original exercise has no published title, so the filter checks its
+/// teaching material against an empty one. That must refuse a practice site
+/// and nothing else: a rule that matched everything would blank the debrief
+/// for these problems, and the happy path above would never notice because
+/// `two-sum` is imported.
+#[test]
+fn an_original_problem_keeps_its_debrief() {
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google"),
+    ])
+    .unwrap();
+    let boot = bootstrap(
+        &config,
+        "interview-original",
+        Some("fixed-capacity-ring-buffer"),
+        45,
+    );
+    assert!(boot.problem.source_title().is_none());
+
+    let mut report = final_report(None, 0, Some("model unavailable"), boot.problem);
+    stamp_report_debrief(&mut report, &boot, &RuntimeState::default());
+
+    assert!(report["debrief"]["scenarioContract"].is_string());
+    assert!(report["debrief"]["approach"].is_string());
+    assert!(report["debrief"]["pitfalls"].is_string());
+    assert_eq!(
+        report["debrief"]["hints"].as_array().unwrap().len(),
+        boot.problem.variant().hints.len()
+    );
+    assert_eq!(
+        report["debrief"]["followUps"].as_array().unwrap().len(),
+        boot.problem.variant().follow_ups.len()
+    );
+}
+
+/// The filter exists for a bank edit that has not happened yet, so the only
+/// way to watch it work is to make that edit here. An original problem is the
+/// case with no published title to compare against, and checking it against
+/// none at all is what keeps the practice site refused.
+#[test]
+fn an_original_problem_debrief_still_refuses_a_practice_site() {
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google"),
+    ])
+    .unwrap();
+    let mut boot = bootstrap(
+        &config,
+        "interview-original",
+        Some("fixed-capacity-ring-buffer"),
+        45,
+    );
+    assert!(boot.problem.source_title().is_none());
+
+    let mut tampered = *boot.problem;
+    tampered.optimal = "You will have seen this one on LeetCode.";
+    boot.problem = Box::leak(Box::new(tampered));
+
+    let mut report = final_report(None, 0, Some("model unavailable"), boot.problem);
+    stamp_report_debrief(&mut report, &boot, &RuntimeState::default());
+
+    assert!(
+        report["debrief"]["approach"].is_null(),
+        "a practice site survived the debrief filter: {}",
+        report["debrief"]["approach"]
+    );
+    assert!(report["debrief"]["pitfalls"].is_string());
+}
+
 /// The liveness pair bookends the evidence, and the closing sample is the
 /// one that says how the interview ended. Nothing covered this merge, so
 /// dropping it, duplicating it, or emitting it out of order was invisible.

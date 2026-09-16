@@ -24,7 +24,7 @@ fn instructions(problem: &Problem, duration_min: u32) -> String {
 /// was written from, by the rule `words::names_title` shares with the
 /// generator.
 fn names_source(problem: &Problem, text: &str) -> bool {
-    words::names_title(problem.title, text)
+    words::names_title(problem.source_title().unwrap_or(""), text)
 }
 
 struct IntegrityEventInput<'a> {
@@ -462,6 +462,20 @@ fn report_naming_the_published_problem_is_refused() {
             "{path} was not refused: {errors:?}"
         );
     }
+}
+
+#[test]
+fn an_original_problem_report_cannot_name_a_practice_site() {
+    let problem = get_problem(Some("fixed-capacity-ring-buffer"));
+    assert!(names_source(problem, "You found this on Leet Code."));
+    let mut report = valid_strict_report();
+    report["summary"] = json!("You found this on LeetCode.");
+    let errors = validate_report_candidate(&report, problem).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "$.summary: names the published problem")
+    );
 }
 
 /// A title with no space in it is still more than one word. The exemption is
@@ -5069,7 +5083,7 @@ fn a_detail_that_reorders_or_hides_text_is_dropped_but_localized_text_survives()
 
 #[test]
 fn every_problem_has_bounded_ordered_question_metadata() {
-    assert_eq!(PROBLEMS.len(), 150);
+    assert_eq!(PROBLEMS.len(), 151);
     for problem in PROBLEMS {
         let metadata = problem.question_metadata();
         assert_eq!(metadata.difficulty, problem.difficulty, "{}", problem.id);
@@ -5118,7 +5132,7 @@ fn generated_problem_metadata_exposes_no_private_rubric() {
         // purpose, shown small beside the scenario; nothing else is exempt.
         assert_eq!(
             public["source"].as_str(),
-            Some(problem.title),
+            problem.source_title(),
             "{}",
             problem.id
         );
@@ -5161,23 +5175,19 @@ fn generated_problem_metadata_exposes_no_private_rubric() {
             .keys()
             .map(String::as_str)
             .collect::<std::collections::HashSet<_>>();
-        assert_eq!(
-            shipped,
-            [
-                "page",
-                "title",
-                "source",
-                "difficulty",
-                "brief",
-                "examples",
-                "starterCode",
-                "interviewMetadata"
-            ]
-            .into_iter()
-            .collect(),
-            "{}",
-            problem.id
-        );
+        let expected = [
+            "page",
+            "title",
+            "difficulty",
+            "brief",
+            "examples",
+            "starterCode",
+            "interviewMetadata",
+        ]
+        .into_iter()
+        .chain(problem.source_title().map(|_| "source"))
+        .collect::<std::collections::HashSet<_>>();
+        assert_eq!(shipped, expected, "{}", problem.id);
         assert_eq!(public["title"].as_str(), Some(variant.title));
 
         // The server's starters are the page's, language for language: written
@@ -5232,7 +5242,7 @@ fn no_debrief_field_names_the_published_problem() {
             .chain(variant.follow_ups.iter().map(|text| ("follow-up", *text)))
         {
             assert!(
-                !names_published_problem(problem.title, text),
+                !names_published_problem(problem.source_title().unwrap_or(""), text),
                 "{} {field} names its published problem: {text}",
                 problem.id
             );

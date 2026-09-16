@@ -281,6 +281,10 @@ pub fn validate_report_candidate(
         .collect::<Vec<_>>();
     validate_improvement_plan(object.get("improvementPlan"), &improvements, &mut errors);
     validate_framework_assessment(object.get("frameworkAssessment"), &mut errors);
+
+    // An original problem has no published title to leak, and an empty one
+    // matches nothing, so the same walk covers both kinds.
+    let source_title = problem.source_title().unwrap_or("");
     for key in [
         "summary",
         "codingFeedback",
@@ -289,12 +293,7 @@ pub fn validate_report_candidate(
     ] {
         if let Some(value) = object.get(key) {
             validate_observable_judgments(value, &format!("$.{key}"), &mut errors);
-            validate_published_problem_names(
-                value,
-                &format!("$.{key}"),
-                problem.title,
-                &mut errors,
-            );
+            validate_published_problem_names(value, &format!("$.{key}"), source_title, &mut errors);
         }
     }
     if !errors.is_empty() {

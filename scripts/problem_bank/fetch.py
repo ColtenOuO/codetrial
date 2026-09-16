@@ -19,6 +19,8 @@ from .bank import (
     STARTER_LANGS,
     STUDY_PLAN_QUERY,
     field,
+    require_valid_origins,
+    imported_ids,
     listed,
     named,
     read_json,
@@ -47,7 +49,7 @@ def request_json(url: str, *, body: object | None = None) -> object:
         raise RuntimeError(f"{url} returned {error.code}") from error
 
 
-def check_plan_slugs(slugs: list[str]) -> None:
+def check_plan_slugs(slugs: list[str], source=SOURCE) -> None:
     """What any copy of the study plan has to satisfy to be usable here.
 
     The count is not checked: naming exactly the bank already fixes it, and a
@@ -58,11 +60,16 @@ def check_plan_slugs(slugs: list[str]) -> None:
     unique = set(slugs)
     if len(unique) != len(slugs):
         raise RuntimeError(f"duplicate slugs in the plan: {repeated(slugs)}")
-    bank = {problem["id"] for problem in read_json(SOURCE)}
-    if unique != bank:
+    problems = read_json(source)
+    require_valid_origins(problems)
+    bank = {problem["id"] for problem in problems}
+    imported = imported_ids(problems)
+    originals = bank - imported
+    if unique != imported:
         raise RuntimeError(
             "plan diverges from problem-bank; port it first. "
-            f"plan adds {sorted(unique - bank)}, plan drops {sorted(bank - unique)}"
+            f"plan adds {sorted(unique - imported)}, plan drops {sorted(imported - unique)}; "
+            f"originals {sorted(originals)} stay outside the plan"
         )
 
 
@@ -152,7 +159,9 @@ def plan_drift() -> int:
         print(f"plan repeats: {', '.join(duplicates)}", file=sys.stderr)
         return 1
     live = set(listed)
-    bank = {problem["id"] for problem in read_json(SOURCE)}
+    problems = read_json(SOURCE)
+    require_valid_origins(problems)
+    bank = imported_ids(problems)
     added, dropped = sorted(live - bank), sorted(bank - live)
     if not added and not dropped:
         print(f"in sync: {len(live)} problems")
