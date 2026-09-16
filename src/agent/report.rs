@@ -9,7 +9,85 @@
 //! The strictness is deliberate. A report reaches a candidate, so a field that
 //! quietly defaults is a verdict nobody wrote.
 
-use super::RUBRIC_VERSION;
+use super::{Problem, RUBRIC_VERSION};
+
+/// Lowercase ASCII words, split on anything that is not a letter or a digit
+/// and inside identifiers where their case changes, the way `spelled_words` in
+/// scripts/problem_bank/rules.py splits them: `minStackCreate` is min, stack,
+/// create, and `LRUCache` is lru, cache.
+///
+/// Public because the generator, the prompt tests and this validator have to
+/// agree on one splitting rule. A second copy is how they stop agreeing.
+pub fn spelled_words(text: &str) -> Vec<String> {
+    let characters = text.chars().collect::<Vec<_>>();
+    let mut words = Vec::new();
+    let mut current = String::new();
+    for (at, &character) in characters.iter().enumerate() {
+        if !character.is_ascii_alphanumeric() {
+            if !current.is_empty() {
+                words.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+        let previous = at.checked_sub(1).map(|before| characters[before]);
+        let next = characters.get(at + 1);
+        let lower_then_upper = character.is_ascii_uppercase()
+            && previous
+                .is_some_and(|before| before.is_ascii_lowercase() || before.is_ascii_digit());
+        let acronym_ends = character.is_ascii_uppercase()
+            && previous.is_some_and(|before| before.is_ascii_uppercase())
+            && next.is_some_and(char::is_ascii_lowercase);
+        if (lower_then_upper || acronym_ends) && !current.is_empty() {
+            words.push(std::mem::take(&mut current));
+        }
+        current.push(character.to_ascii_lowercase());
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words
+}
+
+/// Whether text names a published problem rather than only its interview
+/// scenario. Candidate-facing report fields use this to refuse published
+/// titles, LeetCode, and Leet Code while allowing ordinary single-word titles
+/// such as "Triangle" that a scenario may legitimately use.
+pub fn names_published_problem(title: &str, text: &str) -> bool {
+    let text_words = spelled_words(text);
+    if text_words.iter().any(|word| word == "leetcode")
+        || text_words.windows(2).any(|pair| pair == ["leet", "code"])
+    {
+        return true;
+    }
+
+    // One word, not merely one token. "Triangle" is a word a scenario may use
+    // on its own account, so matching it would refuse honest prose. "LRUCache"
+    // and "MinStack" have no space either, and the whole point of this check is
+    // that a report must not spell them, so the split decides rather than the
+    // absence of punctuation.
+    let title_words = spelled_words(title);
+    if title_words.len() == 1
+        && title
+            .chars()
+            .all(|character| character.is_ascii_alphabetic())
+    {
+        return false;
+    }
+    let target = title_words.concat();
+    (0..text_words.len()).any(|start| {
+        let mut joined = String::new();
+        for word in &text_words[start..] {
+            joined.push_str(word);
+            if joined == target {
+                return true;
+            }
+            if joined.len() >= target.len() {
+                return false;
+            }
+        }
+        false
+    })
+}
 
 /// An evaluation that could not be produced is not an evaluation of zero.
 ///
@@ -114,8 +192,9 @@ pub fn report_response_schema() -> serde_json::Value {
 pub fn validate_report(
     raw: &serde_json::Value,
     hints_used: u32,
+    problem: &Problem,
 ) -> Result<serde_json::Value, Vec<String>> {
-    let mut report = validate_report_candidate(raw)?;
+    let mut report = validate_report_candidate(raw, problem)?;
     report
         .as_object_mut()
         .expect("validated object")
@@ -133,6 +212,7 @@ pub fn validate_report(
 /// is counted here rather than claimed by the model.
 pub fn validate_report_candidate(
     raw: &serde_json::Value,
+    problem: &Problem,
 ) -> Result<serde_json::Value, Vec<String>> {
     let mut errors = Vec::new();
     let Some(object) = raw.as_object() else {
@@ -209,6 +289,12 @@ pub fn validate_report_candidate(
     ] {
         if let Some(value) = object.get(key) {
             validate_observable_judgments(value, &format!("$.{key}"), &mut errors);
+            validate_published_problem_names(
+                value,
+                &format!("$.{key}"),
+                problem.title,
+                &mut errors,
+            );
         }
     }
     if !errors.is_empty() {
@@ -218,6 +304,49 @@ pub fn validate_report_candidate(
     sort_improvement_plan(&mut report);
     apply_weakness_tags(&mut report);
     Ok(report)
+}
+
+/// Reject published-problem names from candidate-facing `summary`,
+/// `codingFeedback`, `communicationFeedback`, and `improvementPlan` fields.
+///
+/// The validator receives the complete fields, rather than a copied list of
+/// strings, so a newly nested strength, improvement, drill, or self-review is
+/// checked before it can reach history, Markdown, or replay.
+fn validate_published_problem_names(
+    value: &serde_json::Value,
+    path: &str,
+    title: &str,
+    errors: &mut Vec<String>,
+) {
+    visit_strings(value, path, &mut |path, text| {
+        if names_published_problem(title, text) {
+            errors.push(format!("{path}: names the published problem"));
+        }
+    });
+}
+
+/// Call `visit` with every string in a report field and the path that names it.
+///
+/// One recursion rather than one per rule. The two validators here are driven
+/// from the same four fields over the same tree, so a fifth candidate-facing
+/// field, or any change to how a path is spelled, used to be two edits that had
+/// to agree: the paths reach the candidate through the repair prompt, so a
+/// disagreement is not caught by either validator failing.
+fn visit_strings(value: &serde_json::Value, path: &str, visit: &mut impl FnMut(&str, &str)) {
+    match value {
+        serde_json::Value::String(text) => visit(path, text),
+        serde_json::Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                visit_strings(item, &format!("{path}[{index}]"), visit);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            for (key, item) in object {
+                visit_strings(item, &format!("{path}.{key}"), visit);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Which weaknesses tag a phase is not a judgment: the rule was always
@@ -291,86 +420,73 @@ fn sort_improvement_plan(report: &mut serde_json::Value) {
 }
 
 fn validate_observable_judgments(value: &serde_json::Value, path: &str, errors: &mut Vec<String>) {
-    match value {
-        serde_json::Value::String(text) => {
-            let normalized = text
-                .chars()
-                .map(|character| {
-                    if character.is_alphanumeric() {
-                        character.to_ascii_lowercase()
-                    } else {
-                        ' '
-                    }
-                })
-                .collect::<String>()
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
-            let padded = format!(" {normalized} ");
-            const UNSUPPORTED: &[&str] = &[
-                " accent ",
-                " accents ",
-                " dialect ",
-                " dialects ",
-                " typing speed ",
-                " typing pace ",
-                " typed slowly ",
-                " typed quickly ",
-                " type slowly ",
-                " type quickly ",
-                " speech rate ",
-                " filler word ",
-                " filler words ",
-                " disfluency ",
-                " disfluencies ",
-                " eye contact ",
-                " posture ",
-                " body language ",
-                " facial expression ",
-                " facial expressions ",
-                " voice tone ",
-                " vocal tone ",
-                " tone of voice ",
-                " attractiveness ",
-                " physical appearance ",
-                " nervous ",
-                " nervousness ",
-                " nervously ",
-                " anxious ",
-                " anxiety ",
-                " confident demeanor ",
-                " lacked confidence ",
-                " lack of confidence ",
-                " personality ",
-                " introvert ",
-                " extrovert ",
-                " charisma ",
-                " appeared confident ",
-                " appears confident ",
-                " seemed confident ",
-                " looked confident ",
-                " sounded confident ",
-                " come across as confident ",
-                " comes across as confident ",
-            ];
-            if UNSUPPORTED.iter().any(|phrase| padded.contains(phrase)) {
-                errors.push(format!(
-                    "{path}: unsupported delivery or personality judgment"
-                ));
-            }
+    visit_strings(value, path, &mut |path, text| {
+        let normalized = text
+            .chars()
+            .map(|character| {
+                if character.is_alphanumeric() {
+                    character.to_ascii_lowercase()
+                } else {
+                    ' '
+                }
+            })
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let padded = format!(" {normalized} ");
+        const UNSUPPORTED: &[&str] = &[
+            " accent ",
+            " accents ",
+            " dialect ",
+            " dialects ",
+            " typing speed ",
+            " typing pace ",
+            " typed slowly ",
+            " typed quickly ",
+            " type slowly ",
+            " type quickly ",
+            " speech rate ",
+            " filler word ",
+            " filler words ",
+            " disfluency ",
+            " disfluencies ",
+            " eye contact ",
+            " posture ",
+            " body language ",
+            " facial expression ",
+            " facial expressions ",
+            " voice tone ",
+            " vocal tone ",
+            " tone of voice ",
+            " attractiveness ",
+            " physical appearance ",
+            " nervous ",
+            " nervousness ",
+            " nervously ",
+            " anxious ",
+            " anxiety ",
+            " confident demeanor ",
+            " lacked confidence ",
+            " lack of confidence ",
+            " personality ",
+            " introvert ",
+            " extrovert ",
+            " charisma ",
+            " appeared confident ",
+            " appears confident ",
+            " seemed confident ",
+            " looked confident ",
+            " sounded confident ",
+            " come across as confident ",
+            " comes across as confident ",
+        ];
+        if UNSUPPORTED.iter().any(|phrase| padded.contains(phrase)) {
+            errors.push(format!(
+                "{path}: unsupported delivery or personality judgment"
+            ));
         }
-        serde_json::Value::Array(items) => {
-            for (index, item) in items.iter().enumerate() {
-                validate_observable_judgments(item, &format!("{path}[{index}]"), errors);
-            }
-        }
-        serde_json::Value::Object(object) => {
-            for (key, item) in object {
-                validate_observable_judgments(item, &format!("{path}.{key}"), errors);
-            }
-        }
-        _ => {}
-    }
+    });
 }
 
 fn exact_keys(
@@ -693,9 +809,10 @@ pub fn final_report(
     raw_report: Option<&serde_json::Value>,
     hints_used: u32,
     error_note: Option<&str>,
+    problem: &Problem,
 ) -> serde_json::Value {
     let (reason, errors) = match (raw_report, error_note) {
-        (Some(raw_report), None) => match validate_report(raw_report, hints_used) {
+        (Some(raw_report), None) => match validate_report(raw_report, hints_used, problem) {
             Ok(report) => return report,
             Err(errors) => ("report schema validation failed", errors),
         },

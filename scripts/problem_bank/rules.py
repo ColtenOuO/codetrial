@@ -43,14 +43,33 @@ def input_values(text: str) -> tuple:
     return tuple(values)
 
 
+def ascii_only(text: str) -> str:
+    """Non-ASCII-alphanumeric characters as spaces, the way the server reads them.
+
+    Tested before lowercasing, not after: `"İ".lower()` is an ASCII `i` and a
+    combining mark, so filtering the lowercased text keeps a letter the server
+    never sees. `is_ascii_alphanumeric` in src/agent/report.rs runs on the
+    original character and treats everything else as a word boundary.
+    """
+    return "".join(
+        character if character.isascii() and character.isalnum() else " "
+        for character in text
+    )
+
+
 def camel_words(text: str) -> str:
     """Letters and digits only, lowercased: `coinChange` and "Coin Change" agree."""
-    return "".join(character for character in text.lower() if character.isalnum())
+    return ascii_only(text).replace(" ", "").lower()
 
 
 def spelled_words(text: str) -> list[str]:
     """Lowercase words, with identifiers split where their case changes, so
-    `minStackCreate` reads as min, stack, create and `LRUCache` as lru, cache."""
+    `minStackCreate` reads as min, stack, create and `LRUCache` as lru, cache.
+
+    `ascii_only` first, so a non-ASCII letter separates words here exactly as
+    it does on the server rather than lowercasing into one.
+    """
+    text = ascii_only(text)
     text = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", text)
     text = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
     return re.findall(r"[a-z0-9]+", text.lower())
@@ -69,7 +88,12 @@ def names_source(title: str, text: str) -> bool:
     brief that says "merge intervals" names the problem whatever the parameter
     is called.
     """
-    return not title.isalpha() and spells(title, text)
+    # `isascii` as well as `isalpha`, because the server spells this exemption
+    # with `is_ascii_alphabetic`. Without it an accented single-word title
+    # would be exempt here and refused there, which is the generator and the
+    # server disagreeing about the same rule.
+    exempt = len(spelled_words(title)) == 1 and title.isascii() and title.isalpha()
+    return not exempt and spells(title, text)
 
 
 def spells(name: str, text: str) -> bool:

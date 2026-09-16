@@ -226,6 +226,7 @@ class VariantValidationTests(unittest.TestCase):
 
     def test_the_title_counts_however_it_is_spaced_but_not_as_a_near_miss(self):
         self.assertTrue(GEN.names_source("LRU Cache", "Implement LRUCache now."))
+        self.assertTrue(GEN.names_source("LRUCache", "Implement LRUCache now."))
         self.assertTrue(GEN.names_source("Min Stack", "MinStack* minStackCreate() {"))
         self.assertTrue(GEN.names_source("3Sum", "This is basically 3 Sum."))
         self.assertFalse(GEN.names_source("3Sum", "Those 3 sums cancel."))
@@ -234,6 +235,29 @@ class VariantValidationTests(unittest.TestCase):
         )
         # A parameter named like a title word does not excuse naming the title.
         self.assertTrue(GEN.names_source("Merge Intervals", "Classic merge intervals."))
+
+    def test_the_generator_answers_the_way_the_server_does(self):
+        # The same table is asserted against `names_published_problem` in
+        # `the_server_answers_the_way_the_generator_does`. The accented rows
+        # are the ones that caught a real split: `str.isalnum` is true for an
+        # accented letter, and lowercasing a dotted capital I yields an ASCII
+        # letter the server never sees.
+        for title, text, expected in [
+            ("İ", "i", False),
+            ("İstanbul", "istanbul", False),
+            ("Café", "we modelled it as a café", True),
+            ("LRUCache", "this is the classic LRU cache", True),
+            ("Triangle", "walk the triangle row by row", False),
+            ("3Sum", "Those 3 sums cancel.", False),
+            ("3Sum", "This is basically 3 Sum.", True),
+            ("MinStack", "a min stack keeps its minimum beside each push", True),
+            ("LRU Cache", "Implement LRUCache now.", True),
+            # Pins `ascii_only` inside `spelled_words`: without it the
+            # generator splits this as lrui, cache and the server as lru,
+            # cache, so the generator ships a variant the server refuses.
+            ("LRU Cache", "the LRU\u0130Cache field", True),
+        ]:
+            self.assertEqual(GEN.names_source(title, text), expected, (title, text))
 
     def test_published_sample_text_is_refused_wherever_the_browser_gets_it(self):
         sentence = {"label": "sentence", "input": [[1], 2], "expected": "coin change"}
