@@ -299,8 +299,12 @@ test("replay-producer envelope", () => {
     "a server that records nothing, an interview that does not exist yet, and a replay the server has stopped accepting",
   );
   assert.ok(
-    record.includes("replayQueue.push({ v: replayVersion, kind, at: Date.now(), payload });"),
+    record.includes("const event = { v: replayVersion, kind, at: Date.now(), payload };"),
     "one envelope, written once",
+  );
+  assert.ok(
+    record.includes("replayQueue.push(event);"),
+    "and queued as it was written: the size the queue is bounded by is this event's own",
   );
   assert.ok(
     /globalThis\.CODETRIAL_REPLAY_VERSION/.test(interview),
@@ -310,9 +314,11 @@ test("replay-producer envelope", () => {
   // The batch send lives in `sendQueuedBatch`; `flushReplay` is the queue in
   // front of it that keeps two POSTs from committing out of order.
   const flush = withoutComments(functionBody(interview, "sendQueuedBatch"));
+  assert.ok(flush.includes("const batch = takeBatch();"), "one batch, taken in one place");
+  const take = withoutComments(functionBody(interview, "takeBatch"));
   assert.ok(
-    flush.includes("replayQueue.splice(0, REPLAY_MAX_BATCH)"),
-    "batched to the server's own limit",
+    take.includes("count < REPLAY_MAX_BATCH") && take.includes("REPLAY_KEEPALIVE_MAX_BYTES"),
+    "batched to the server's own limit and to what one keepalive post may carry",
   );
   const chain = withoutComments(functionBody(interview, "flushReplay"));
   assert.ok(
