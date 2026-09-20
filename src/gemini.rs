@@ -599,7 +599,7 @@ pub fn live_tool_declarations() -> Value {
     json!([
         {
             "name": TOOL_READ_EDITOR,
-            "description": "Return the current editor language, numbered code, and latest test run summary."
+            "description": "Return the current editor language, numbered code, latest test run summary, and how many minutes remain on the candidate's countdown."
         },
         {
             "name": TOOL_LOG_HINT,

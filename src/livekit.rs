@@ -44,7 +44,8 @@ use crate::agent::{
     CANDIDATE_SPEAKER, INTERIM_CONTEXT_NOTES, InterimReviewInput, RuntimeState, SpeakerTurn,
     WATCH_TICK_S, apply_data_event, code_head, framework_evidence_json, framework_progress,
     interim_review_prompt, parse_participant_metadata, read_editor_text, record_framework_evidence,
-    record_interim_notes, released_follow_ups, transcript_tail, unreviewed_from, wrap_up,
+    record_interim_notes, released_follow_ups, transcript_tail, unreviewed_from, with_timer,
+    wrap_up,
 };
 use crate::config::AgentConfig;
 use crate::runtime::TOPIC_CONTROL;
@@ -453,7 +454,10 @@ async fn replace_gemini_session(
     // the write most likely to meet a socket that is already gone.
     if let Err(error) = context
         .gemini
-        .send_text(&crate::agent::cold_restart(context.state))
+        .send_text(&crate::agent::with_timer(
+            context.state,
+            crate::agent::cold_restart(context.state),
+        ))
         .await
     {
         eprintln!("cold-restart briefing failed ({error}); waiting for the close to be reported");
@@ -701,7 +705,9 @@ async fn open_session<'a>(
         .await?;
     }
 
-    gemini.send_text(&boot.greeting).await?;
+    gemini
+        .send_text(&with_timer(&turn.state, boot.greeting.clone()))
+        .await?;
     turn.activity.mark_speaking();
 
     Ok(Some(OpenSession {
@@ -1922,6 +1928,7 @@ pub fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) ->
                 &state.code,
                 state.last_test_run.as_ref(),
                 state.test_runs,
+                crate::agent::minutes_left(state),
             )
         }),
 
@@ -2073,7 +2080,10 @@ async fn send_wrap_up_and_wait(
     context: &mut GeminiEventContext<'_>,
     reason: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    context.gemini.send_text(&wrap_up(reason)).await?;
+    context
+        .gemini
+        .send_text(&with_timer(context.state, wrap_up(reason)))
+        .await?;
     context.activity.mark_speaking();
     let deadline = Instant::now() + WRAP_UP_WAIT;
     loop {

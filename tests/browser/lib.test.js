@@ -561,16 +561,21 @@ test("report contract migration preserves legacy and rejects unknown provenance"
   assert.equal(legacy.summary, "old report");
 
   const active = {
-    bundleVersion: 5,
-    livePromptVersion: 2,
+    bundleVersion: 6,
+    livePromptVersion: 3,
     reportPromptVersion: 5,
     rubricVersion: 1,
     reportSchemaVersion: 1,
   };
   assert.deepEqual(sanitizeReport({ incomplete: true, interviewContract: active }).interviewContract, active);
 
-  // Bundle 4 shares the rubric and the schema, so its scores survive the bump
-  // and the report still names the bundle that produced it.
+  // Bundles 4 and 5 share the rubric and the schema, so their scores survive
+  // the bump and the report still names the bundle that produced it.
+  const priorPrompts = { ...active, bundleVersion: 5, livePromptVersion: 2 };
+  const scoredPriorPrompts = sanitizeReport({ codingScore: 80, interviewContract: priorPrompts });
+  assert.deepEqual(scoredPriorPrompts.interviewContract, priorPrompts);
+  assert.equal(scoredPriorPrompts.codingScore, 80);
+
   const previous = { ...active, bundleVersion: 4, livePromptVersion: 1, reportPromptVersion: 4 };
   const kept = sanitizeReport({ codingScore: 70, communicationScore: 60, decision: "NO_HIRE", interviewContract: previous });
   assert.deepEqual(kept.interviewContract, previous);
