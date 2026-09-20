@@ -3,9 +3,9 @@ mod common;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -16,7 +16,62 @@ fn run_cli_args(args: &[&str]) -> (i32, String, String) {
     run_cli_args_with_env(args, &[])
 }
 
+/// Written by `wait_for_http` and read by `spawn_server`; the pair is pinned
+/// in `only_sigkill_is_retryable`.
+const SIGKILL_PREFIX: &str = "SIGKILL: ";
+
+fn was_sigkill(status: &ExitStatus) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        status.signal() == Some(9)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = status;
+        false
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn only_sigkill_is_retryable() {
+    use std::os::unix::process::ExitStatusExt;
+
+    assert!(was_sigkill(&ExitStatus::from_raw(9)));
+    assert!(!was_sigkill(&ExitStatus::from_raw(11)));
+}
+
+/// Runs `once` until it produces a result, tolerating a kill.
+///
+/// Retried for the one reason a run says nothing about the binary: the machine
+/// ran out of memory and the kernel chose this process. `code()` is `None` for
+/// a death by signal, and defaulting that to 0 handed every caller a successful
+/// exit status for a process that never ran, so
+/// `reject_usage_errors_with_exit_two` failed reporting 0 against 2 and read as
+/// the binary having accepted a usage error it had refused.
+///
+/// Both runners share this, so the attempt bound and what a run out of attempts
+/// says cannot drift apart between them.
+fn retry_on_sigkill<T>(args: &[&str], mut once: impl FnMut() -> Option<T>) -> T {
+    for attempt in 0..5 {
+        if let Some(result) = once() {
+            return result;
+        }
+        assert!(attempt < 4, "{args:?}: killed by a signal five times over");
+    }
+    unreachable!("the loop returns or asserts")
+}
+
 fn run_cli_args_with_env(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, String) {
+    retry_on_sigkill(args, || run_cli_args_with_env_once(args, envs))
+}
+
+fn run_cli_args_with_env_once(
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> Option<(i32, String, String)> {
     let cwd = exe_temp_path("empty-cwd");
     std::fs::create_dir_all(&cwd).expect("empty cwd should create");
     let output = cli_command(args, envs, &cwd)
@@ -24,11 +79,19 @@ fn run_cli_args_with_env(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, 
         .expect("codetrial should exit");
     let _ = std::fs::remove_dir_all(cwd);
 
-    (
-        output.status.code().unwrap_or_default(),
+    let Some(code) = output.status.code() else {
+        assert!(
+            was_sigkill(&output.status),
+            "{args:?}: killed by an unexpected signal: {}",
+            output.status
+        );
+        return None;
+    };
+    Some((
+        code,
         String::from_utf8(output.stdout).expect("stdout should be UTF-8"),
         String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
-    )
+    ))
 }
 
 /// The same invocation, but the process is required to stop by itself.
@@ -41,6 +104,13 @@ fn run_cli_args_with_env(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, 
 /// CI as a 33-second timeout. Bounded, so a guard that stopped guarding is a
 /// red test.
 fn run_cli_until_exit(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, String) {
+    // Retried on a kill for the same reason the other runner is: the machine
+    // running out of memory says nothing about the binary, and this helper's
+    // whole point is that a refusal is observed rather than assumed.
+    retry_on_sigkill(args, || run_cli_until_exit_once(args, envs))
+}
+
+fn run_cli_until_exit_once(args: &[&str], envs: &[(&str, &str)]) -> Option<(i32, String, String)> {
     // Generous for a loaded runner, and well inside the timeout `cargo mutants`
     // derives from the baseline (33s when this was written). A bound above that
     // would score a caught mutant as a timeout again, which is the failure this
@@ -92,7 +162,17 @@ fn run_cli_until_exit(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, Str
     let stderr = err.join().expect("stderr reader should finish");
     let _ = std::fs::remove_dir_all(&cwd);
 
-    (status.code().unwrap_or_default(), stdout, stderr)
+    // Not `unwrap_or_default`: `code()` is `None` for a death by signal, and
+    // zero is the one value that reads as a clean exit. An out-of-memory kill
+    // reported that way turned "the binary refused" into "the binary accepted".
+    let Some(code) = status.code() else {
+        assert!(
+            was_sigkill(&status),
+            "codetrial {args:?} died of an unexpected signal: {status}"
+        );
+        return None;
+    };
+    Some((code, stdout, stderr))
 }
 
 /// One place builds the invocation, so the two runners cannot drift about which
@@ -249,8 +329,13 @@ fn wait_for_http(addr: &str, child: &mut Child) -> Result<(), String> {
             if let Some(stream) = child.stderr.as_mut() {
                 let _ = stream.read_to_string(&mut stderr);
             }
+            let cause = if was_sigkill(&status) {
+                SIGKILL_PREFIX
+            } else {
+                ""
+            };
             return Err(format!(
-                "server exited before listening: {status}; stderr={stderr}"
+                "{cause}server exited before listening: {status}; stderr={stderr}"
             ));
         }
         thread::sleep(Duration::from_millis(50));
@@ -262,16 +347,30 @@ fn wait_for_http(addr: &str, child: &mut Child) -> Result<(), String> {
 /// its listener, so another socket can take it first. Retry on that specific
 /// loss instead of reporting it as the behavior under test failing.
 fn spawn_server(build: impl Fn(&str) -> Command) -> (String, ServerProcess) {
+    let mut last = String::new();
     for _ in 0..5 {
         let addr = free_addr();
         let mut child = ServerProcess::spawn(&mut build(&addr));
         match wait_for_http(&addr, &mut child) {
             Ok(()) => return (addr, child),
-            Err(error) if error.contains("Address already in use") => continue,
+
+            // Two startup losses that say nothing about the binary. The port
+            // was taken between `free_addr` closing its listener and the child
+            // binding it. Or the machine ran out of memory and the kernel chose
+            // this process: `MAX_LIVE_SERVERS` is what keeps that rare, and a
+            // suite that reported it as the behavior under test failing would
+            // be reporting the size of the machine it ran on.
+            Err(error)
+                if error.contains("Address already in use")
+                    || error.starts_with(SIGKILL_PREFIX) =>
+            {
+                last = error;
+                continue;
+            }
             Err(error) => panic!("{error}"),
         }
     }
-    panic!("could not start the server on a free port");
+    panic!("no attempt started a server; the last one said: {last}");
 }
 
 /// A cold-start server: the binary beside `dir`, with no config file on any
@@ -326,10 +425,160 @@ fn http_request(addr: &str, request: &str) -> String {
     response
 }
 
+/// How many servers may be live at once.
+///
+/// Most tests in this file start a real `codetrial web`, and the test harness
+/// runs one thread per core, so the default is as many live servers as the
+/// machine has cores. Each is a whole binary with the WebRTC stack linked in,
+/// which on a small machine is more resident memory than there is to give: the
+/// kernel picks servers off with SIGKILL, and `wait_for_http` reports the death
+/// as the behavior under test failing. Retrying would not help, because the
+/// next attempt asks the same machine for the same thing.
+///
+/// Four rather than a number derived from the hardware. The cap only has to be
+/// below what the smallest machine running this suite can hold, and a bound
+/// that varies by host is a suite that is flaky on exactly the hosts nobody
+/// tests on. Tests that need no server never queue here.
+const MAX_LIVE_SERVERS: usize = 4;
+
+fn server_slots() -> &'static (Mutex<usize>, Condvar) {
+    static SLOTS: std::sync::OnceLock<(Mutex<usize>, Condvar)> = std::sync::OnceLock::new();
+    SLOTS.get_or_init(|| (Mutex::new(MAX_LIVE_SERVERS), Condvar::new()))
+}
+
+// How many servers this thread is already holding, so the slot is charged to
+// the test rather than to each server it starts.
+//
+// `stop_child` kills a server without dropping the `ServerProcess` that owns
+// it, so a test that stops one and starts another holds two at once. Charging
+// both would let enough such tests take every slot and then wait on each other
+// for the second one they each need, which is a hung suite rather than a slow
+// one. A test pays once and keeps paying until it ends.
+thread_local! {
+    static SERVERS_HELD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// How many times this thread has handed the shared slot back, so a test can say
+// when the release happened rather than only that the count moved. Per thread
+// because the release is, which keeps it clear of every other test taking and
+// returning slots at the same time.
+thread_local! {
+    static SLOTS_RELEASED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Held for as long as the server is alive, because the memory is held that
+/// long. Taken before the spawn and returned by `ServerProcess`'s `Drop`, which
+/// already owns reaping the child, so a panicking test releases it by unwinding
+/// rather than leaving the suite one slot poorer for the rest of the run.
+struct ServerSlot {
+    /// Whether this one took the shared slot, or joined the one its thread
+    /// already holds.
+    owns: bool,
+}
+
+impl ServerSlot {
+    fn take() -> Self {
+        let owns = SERVERS_HELD.with(|held| {
+            let depth = held.get();
+            held.set(depth + 1);
+            depth == 0
+        });
+        if owns {
+            let (free, released) = server_slots();
+            let mut free = free.lock().unwrap_or_else(|error| error.into_inner());
+            while *free == 0 {
+                free = released
+                    .wait(free)
+                    .unwrap_or_else(|error| error.into_inner());
+            }
+            *free -= 1;
+        }
+        Self { owns }
+    }
+}
+
+impl Drop for ServerSlot {
+    fn drop(&mut self) {
+        // Released when the thread's last server goes, not when the one that
+        // took the slot goes. A test holding two and dropping the first-created
+        // one first would otherwise hand the slot back while its second server
+        // is still running, and the cap this exists to hold would be one short.
+        let last = SERVERS_HELD.with(|held| {
+            let depth = held.get().saturating_sub(1);
+            held.set(depth);
+            depth == 0
+        });
+        if !last {
+            return;
+        }
+        SLOTS_RELEASED.with(|count| count.set(count.get() + 1));
+        let (free, released) = server_slots();
+        *free.lock().unwrap_or_else(|error| error.into_inner()) += 1;
+        released.notify_one();
+    }
+}
+
+/// Asserted on the flags rather than on the free count, because every other
+/// test in this file is taking and returning slots while this one runs and the
+/// count is theirs too.
+/// Drop order is the test author's, not this file's: a test can stop one
+/// server and drop it before the one it started afterwards. The slot belongs to
+/// the thread for as long as any of its servers is alive, so the release has to
+/// wait for the last of them rather than for the one that took it.
+#[test]
+fn the_slot_outlives_a_server_dropped_out_of_order() {
+    let before = SLOTS_RELEASED.with(|count| count.get());
+    let first = ServerSlot::take();
+    let second = ServerSlot::take();
+    assert!(first.owns);
+    assert!(!second.owns);
+
+    drop(first);
+    assert_eq!(
+        SLOTS_RELEASED.with(|count| count.get()),
+        before,
+        "the slot went back while this thread still held a server"
+    );
+
+    drop(second);
+    assert_eq!(
+        SLOTS_RELEASED.with(|count| count.get()),
+        before + 1,
+        "the last server went and the slot did not go back"
+    );
+}
+
+#[test]
+fn a_thread_running_two_servers_pays_for_one_slot() {
+    let outer = ServerSlot::take();
+    let inner = ServerSlot::take();
+    assert!(
+        outer.owns,
+        "the first server on a thread takes the shared slot"
+    );
+    assert!(
+        !inner.owns,
+        "a second server on the same thread joins that slot rather than waiting \
+         for one the thread it is waiting on cannot give back"
+    );
+    drop(inner);
+    drop(outer);
+    assert_eq!(
+        SERVERS_HELD.with(|held| held.get()),
+        0,
+        "both are given back"
+    );
+}
+
 /// Kills the spawned server on drop. Without this a failing assertion unwinds
 /// past `stop_child` and leaves a `codetrial web` process listening for the
 /// rest of the machine's uptime; several accumulated during development.
-struct ServerProcess(Child);
+struct ServerProcess {
+    child: Child,
+    /// Never read. It is here so the slot is given back when the server it
+    /// stands for is reaped, and not one statement sooner.
+    _slot: ServerSlot,
+}
 
 impl ServerProcess {
     /// stderr is piped here rather than left to each caller, because
@@ -341,32 +590,36 @@ impl ServerProcess {
     /// `binary_web_does_not_require_github_oauth_config` did: the one spawning
     /// test that did not pipe was the one whose retry never fired.
     fn spawn(command: &mut Command) -> Self {
-        Self(
-            command
+        // The slot is taken before the spawn, not after, or the bound would be
+        // on servers this suite admits to rather than on servers running.
+        let slot = ServerSlot::take();
+        Self {
+            child: command
                 .stderr(Stdio::piped())
                 .spawn()
                 .expect("codetrial web should start"),
-        )
+            _slot: slot,
+        }
     }
 }
 
 impl std::ops::Deref for ServerProcess {
     type Target = Child;
     fn deref(&self) -> &Child {
-        &self.0
+        &self.child
     }
 }
 
 impl std::ops::DerefMut for ServerProcess {
     fn deref_mut(&mut self) -> &mut Child {
-        &mut self.0
+        &mut self.child
     }
 }
 
 impl Drop for ServerProcess {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
