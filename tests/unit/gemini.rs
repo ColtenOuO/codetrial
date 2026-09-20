@@ -304,6 +304,57 @@ fn live_setup_uses_native_audio_voice_tools_and_transcription() {
     assert_eq!(setup["sessionResumption"], json!({}));
 }
 
+/// A whiteboard session is offered a different first tool and a different set
+/// of evidence sources, and neither is a matter of wording: a model shown
+/// `read_editor` in an interview that has no editor calls it, and the only
+/// answer costs a turn of the candidate's time.
+#[test]
+fn a_whiteboard_session_is_offered_the_board_and_not_the_editor() {
+    let config = live_config(&[]);
+    let boot = crate::runtime::bootstrap_with_rounds(
+        &config,
+        "interview-board",
+        Some("two-sum"),
+        45,
+        crate::runtime::RuntimeOptions {
+            interview_mode: InterviewMode::Whiteboard,
+            ..Default::default()
+        },
+    );
+
+    let setup = &live_setup_message(&boot, None)["setup"];
+    let tools = setup["tools"][0]["functionDeclarations"]
+        .as_array()
+        .expect("the declarations are a list");
+    let names = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("a tool has a name"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        vec![
+            TOOL_READ_BOARD,
+            TOOL_LOG_HINT,
+            TOOL_RECORD_FRAMEWORK_EVIDENCE,
+            TOOL_END_INTERVIEW
+        ]
+    );
+
+    // The editor's two sources are gone rather than merely unused. Left in the
+    // enum they are an invitation to record an observation from a test run
+    // that cannot have happened.
+    assert_eq!(
+        tools[2]["parameters"]["properties"]["source"]["enum"],
+        json!(["candidate_speech", "board_snapshot", "session_timing"])
+    );
+    assert!(
+        setup["systemInstruction"]["parts"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("shared whiteboard")
+    );
+}
+
 /// The empty object above asks for handles; this is what spends one. A
 /// setup that drops the handle reconnects into a session with no history,
 /// which the candidate hears as the interviewer starting the interview

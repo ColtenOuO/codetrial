@@ -12,8 +12,9 @@ use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async, tungstenite::protocol::Message,
 };
 
+use crate::agent::InterviewMode;
 use crate::runtime::{
-    RuntimeBootstrap, TOOL_END_INTERVIEW, TOOL_LOG_HINT, TOOL_READ_EDITOR,
+    RuntimeBootstrap, TOOL_END_INTERVIEW, TOOL_LOG_HINT, TOOL_READ_BOARD, TOOL_READ_EDITOR,
     TOOL_RECORD_FRAMEWORK_EVIDENCE,
 };
 
@@ -595,11 +596,38 @@ pub fn redact_api_key(text: &str, api_key: &str) -> String {
 
 /// The tools the live interviewer is offered, public so the behaviour check in
 /// `tests/interview_behavior.rs` offers a text model exactly the same ones.
-pub fn live_tool_declarations() -> Value {
+///
+/// The reading tool and the evidence sources follow the mode, and they follow
+/// it here rather than being offered together and refused later. A model that
+/// is shown `read_editor` in a whiteboard interview calls it, and the only
+/// honest answer is that there is no editor, which costs a turn of the
+/// candidate's time to say.
+pub fn live_tool_declarations(mode: InterviewMode) -> Value {
+    let (read_tool, read_description) = if mode.is_whiteboard() {
+        (
+            TOOL_READ_BOARD,
+            "Put the candidate's latest whiteboard image in front of you again, and report how much of it there is, when it was drawn, and how many minutes remain on the candidate's countdown.",
+        )
+    } else {
+        (
+            TOOL_READ_EDITOR,
+            "Return the current editor language, numbered code, latest test run summary, and how many minutes remain on the candidate's countdown.",
+        )
+    };
+    let evidence_sources = if mode.is_whiteboard() {
+        json!(["candidate_speech", "board_snapshot", "session_timing"])
+    } else {
+        json!([
+            "candidate_speech",
+            "editor_snapshot",
+            "test_event",
+            "session_timing"
+        ])
+    };
     json!([
         {
-            "name": TOOL_READ_EDITOR,
-            "description": "Return the current editor language, numbered code, latest test run summary, and how many minutes remain on the candidate's countdown."
+            "name": read_tool,
+            "description": read_description
         },
         {
             "name": TOOL_LOG_HINT,
@@ -614,7 +642,7 @@ pub fn live_tool_declarations() -> Value {
         },
         {
             "name": TOOL_RECORD_FRAMEWORK_EVIDENCE,
-            "description": "Record trusted REACTO or STAR evidence only after it is present in candidate speech, an editor snapshot, or a test event.",
+            "description": "Record trusted REACTO or STAR evidence only after it is present in candidate speech or in what the candidate's working surface shows.",
 
             // Schema.Type is an enum, so these are its value names, not free
             // text. Lowercase happens to be accepted here and is rejected on
@@ -624,7 +652,7 @@ pub fn live_tool_declarations() -> Value {
                 "type": "OBJECT",
                 "properties": {
                     "phase": { "type": "STRING", "enum": ["repeat", "example", "algorithm", "coding", "test", "optimizations", "situation", "task", "action", "result"] },
-                    "source": { "type": "STRING", "enum": ["candidate_speech", "editor_snapshot", "test_event", "session_timing"] },
+                    "source": { "type": "STRING", "enum": evidence_sources },
                     "kind": { "type": "STRING", "enum": ["observed", "inferred", "skipped"] },
                     "confidence": { "type": "INTEGER", "minimum": 0, "maximum": 100 },
                     "summary": { "type": "STRING", "description": "Short evidence-grounded summary without scores or private rubric text." }
@@ -664,7 +692,7 @@ fn live_setup_message(boot: &RuntimeBootstrap<'_>, resume: Option<&str>) -> Valu
                     { "text": boot.instructions }
                 ]
             },
-            "tools": [{ "functionDeclarations": live_tool_declarations() }],
+            "tools": [{ "functionDeclarations": live_tool_declarations(boot.interview_mode) }],
             "inputAudioTranscription": {},
             "outputAudioTranscription": {},
             "realtimeInputConfig": {

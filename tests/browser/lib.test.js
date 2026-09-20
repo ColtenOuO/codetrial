@@ -8,6 +8,9 @@ import { livekitSource, read } from "./source.js";
 
 import {
   ACTIVE_CONTRACT,
+  boardStreamOptions,
+  interviewMode,
+  modeIsWhiteboard,
   FRAMEWORKS,
   frameworkChecklist,
   captionWindow,
@@ -1177,6 +1180,32 @@ test("the replay timeline interleaves windows with the moments without joining t
   // A replay with no avatar rows has no windows, so the page has nothing to
   // explain and hides the paragraph explaining it.
   assert.deepEqual(replayTimeline([editor(0, "only")]).windows, []);
+});
+
+test("a mode this build does not know is the editor interview", () => {
+  // The mode decides whether the page builds a board and whether it publishes
+  // the editor at all, so a spelling nobody recognizes has to land on the
+  // interview that has always existed rather than on something in between.
+  assert.equal(interviewMode("whiteboard"), "whiteboard");
+  assert.equal(modeIsWhiteboard("whiteboard"), true);
+  for (const value of ["coding", "Whiteboard", "board", "", null, undefined, 7]) {
+    assert.equal(interviewMode(value), "coding", `mode ${String(value)}`);
+    assert.equal(modeIsWhiteboard(value), false);
+  }
+});
+
+test("a board stream is announced on its own topic with its stroke count", () => {
+  // The agent reads `strokes` off these attributes and routes on the topic,
+  // and both are strings on the wire; tests/fixtures/board-stream.json feeds
+  // this same output to the Rust side.
+  assert.deepEqual(boardStreamOptions(4, 31, 40_960), {
+    topic: "board_image",
+    name: "board-4.jpg",
+    mimeType: "image/jpeg",
+    totalSize: 40_960,
+    attributes: { strokes: "31" },
+  });
+  assert.equal(boardStreamOptions(1, 0, 10).attributes.strokes, "0");
 });
 
 test("the contract this build scores is the shape sanitizeReport accepts", () => {
