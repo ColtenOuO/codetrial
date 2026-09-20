@@ -186,8 +186,16 @@ test("a rate-limited replay batch is kept, not dropped", () => {
   assert.match(send, /429[\s\S]*retryAfter =/, "and by waiting out the window");
   assert.match(
     functionBody(feed, "recordReplay"),
-    /REPLAY_MAX_BATCH && Date\.now\(\) >= retryAfter/,
+    /full && Date\.now\(\) >= retryAfter/,
     "the fill trigger has to respect the wait, or nothing does",
+  );
+  // Full by either bound. A queue that only counts events holds an editor
+  // snapshot of a pasted file until the interview ends, which is where the
+  // post carrying it can no longer afford to be sent without `keepalive`.
+  assert.match(
+    functionBody(feed, "recordReplay"),
+    /REPLAY_MAX_BATCH \|\|[\s\S]*REPLAY_KEEPALIVE_MAX_BYTES/,
+    "and the trigger counts bytes as well as events",
   );
 });
 

@@ -25,6 +25,22 @@ const REPLAY_FLUSH_MS = 1000;
 const REPLAY_MAX_BATCH = 32;
 const REPLAY_RETRY_MS = 60_000;
 const REPLAY_RETRY_MAX_MS = 120_000;
+const REPLAY_KEEPALIVE_MAX_BYTES = 64 * 1024;
+
+/// `ReplayClass::Restates` in `src/recording/replay.rs`, named again here
+/// because the browser cannot ask the server how it classifies a kind.
+const REPLAY_RESTATES_KINDS = new Set(["editor", "stage"]);
+
+const encoder = new TextEncoder();
+
+/// The body an event goes in, and the event alone. The separators are counted
+/// where the batch is, because there is one fewer of them than there are
+/// events and a batch of exactly the budget must not be split.
+const REPLAY_ENVELOPE_BYTES = encoder.encode(JSON.stringify({ events: [] })).length;
+
+function eventBytes(event) {
+  return encoder.encode(JSON.stringify(event)).length;
+}
 
 /// How often the clock and the problem heading are restated.
 ///
@@ -35,6 +51,9 @@ const REPLAY_RETRY_MAX_MS = 120_000;
 const REPLAY_STAGE_MS = 15000;
 
 let replayQueue = [];
+/// What `replayQueue` would encode to, kept in step with every push, batch and
+/// put-back so the size of the next post is known without encoding it.
+let queuedBytes = 0;
 /// When the server's rate limit stops applying, as a wall-clock instant.
 let retryAfter = 0;
 let replayTimer = null;
@@ -51,12 +70,20 @@ let replayWindowOpen = false;
 /// stops when the server says it has heard enough.
 export function recordReplay(kind, payload) {
   if (!recordingEnabled || !state.interviewId || replayClosed) return;
-  replayQueue.push({ v: replayVersion, kind, at: Date.now(), payload });
-  if (replayQueue.length >= REPLAY_MAX_BATCH && Date.now() >= retryAfter) {
+  const event = { v: replayVersion, kind, at: Date.now(), payload };
+  replayQueue.push(event);
+  queuedBytes += eventBytes(event);
+  const full =
+    replayQueue.length >= REPLAY_MAX_BATCH || queuedBodyBytes() > REPLAY_KEEPALIVE_MAX_BYTES;
+  if (full && Date.now() >= retryAfter) {
     void flushReplay();
     return;
   }
   scheduleFlush();
+}
+
+function queuedBodyBytes() {
+  return REPLAY_ENVELOPE_BYTES + queuedBytes + Math.max(0, replayQueue.length - 1);
 }
 
 function scheduleFlush() {
@@ -84,6 +111,7 @@ function retryDelayMs(header) {
 export function closeReplay() {
   replayClosed = true;
   replayQueue = [];
+  queuedBytes = 0;
   clearTimeout(replayTimer);
   replayTimer = null;
 }
@@ -120,12 +148,26 @@ async function sendQueuedBatch() {
     scheduleFlush();
     return;
   }
-  const batch = replayQueue.splice(0, REPLAY_MAX_BATCH);
+  compactSupersededRestates();
+  const batch = takeBatch();
+  const body = JSON.stringify({ events: batch });
   try {
+    // Kept alive so a batch already on its way survives the tab closing. The
+    // interview's last events are flushed as the candidate reaches the report,
+    // which is the moment a candidate is most likely to leave, and a plain
+    // fetch is cancelled with the page. Every batch rather than only the last,
+    // because the end may be the one inside a Retry-After window and so go
+    // out on the timer rather than from the call that asked for it.
+    //
+    // The flag is still decided from the body rather than assumed: `takeBatch`
+    // keeps a batch inside the budget, except for a single event that is over
+    // it on its own, which the server still accepts and a keepalive fetch would
+    // reject outright.
     const response = await fetch(`/api/interviews/${encodeURIComponent(state.interviewId)}/events`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ events: batch }),
+      body,
+      keepalive: new TextEncoder().encode(body).length <= REPLAY_KEEPALIVE_MAX_BYTES,
     });
     // 404 is an interview whose consent has been withdrawn, and quota is an
     // interview that has recorded all it may. Both mean the server will refuse
@@ -161,12 +203,83 @@ async function sendQueuedBatch() {
     // event after it: a limit answered by asking harder.
     if (response.status === 429) {
       replayQueue.unshift(...batch);
+      queuedBytes += batch.reduce((total, event) => total + eventBytes(event), 0);
       retryAfter = Date.now() + retryDelayMs(response.headers.get("Retry-After"));
     }
   } catch {
     // Offline. The interview is what matters and it is still running.
   }
   if (replayQueue.length) scheduleFlush();
+}
+
+/// The longest run from the front of the queue that one post may carry.
+///
+/// Bounded by the server's count limit and by the keepalive budget, because a
+/// batch that clears the first can fail the second: `REPLAY_MAX_BATCH` editor
+/// snapshots are several hundred kilobytes, and a post that size is sent with
+/// no flag and dies with the page.
+///
+/// The first event goes whatever its size. The server's own body limit is four
+/// times this budget, so an oversized single event is still storable, while a
+/// batch of none would hand the queue back to the timer that would take none
+/// again.
+function takeBatch() {
+  let bytes = REPLAY_ENVELOPE_BYTES;
+  let taken = 0;
+  let count = 0;
+  while (count < REPLAY_MAX_BATCH && count < replayQueue.length) {
+    const next = eventBytes(replayQueue[count]);
+    // The comma this event brings with it, which the first one does not.
+    const cost = count ? next + 1 : next;
+    if (count && bytes + cost > REPLAY_KEEPALIVE_MAX_BYTES) break;
+    bytes += cost;
+    taken += next;
+    count += 1;
+  }
+  queuedBytes -= taken;
+  return replayQueue.splice(0, count);
+}
+
+/// Drop the queued `editor` and `stage` frames that a later queued frame of the
+/// same kind already restates, and nothing else.
+///
+/// Only when the lifecycle events are queued behind more than one post's worth
+/// of replay. `ended` and `rounds_final` are flushed as the candidate reaches
+/// the report, which is when the tab goes, so they have to travel in a post
+/// small enough to be sent with `keepalive`; a second batch behind them waits
+/// on the first batch's response and never leaves at all. Sending it without
+/// that wait is not the fix: `seq` is allocated inside the insert and every
+/// read orders by it, so a small post that wins the race would hide the events
+/// of the larger one behind an `ended` row that `responseWindows` stops at.
+///
+/// Narrow on purpose, and not a way to make any queue fit. These two kinds
+/// restate a whole value and a review read keeps only the newest of each, so
+/// what goes here is what no reader of the finished replay would have been
+/// shown; the one reader that loses anything is tailing the interview live as
+/// it ends. Every transcript line, test run, avatar transition and lifecycle
+/// row is kept, in order, and a queue that still does not fit is split into
+/// posts rather than compacted any further.
+function compactSupersededRestates() {
+  if (queuedBodyBytes() <= REPLAY_KEEPALIVE_MAX_BYTES) return;
+  if (!replayQueue.some((event) => event.kind === "lifecycle")) return;
+  // Backwards, because the frame that supersedes is the later one: the first
+  // of a kind met on the way back is the newest, and everything of that kind
+  // before it has been restated by it.
+  const newest = new Set();
+  const kept = [];
+  for (let index = replayQueue.length - 1; index >= 0; index -= 1) {
+    const event = replayQueue[index];
+    if (REPLAY_RESTATES_KINDS.has(event.kind)) {
+      if (newest.has(event.kind)) {
+        queuedBytes -= eventBytes(event);
+        continue;
+      }
+      newest.add(event.kind);
+    }
+    kept.push(event);
+  }
+  kept.reverse();
+  replayQueue = kept;
 }
 
 /// The problem heading, as the recording shows it.
