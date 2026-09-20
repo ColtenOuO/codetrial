@@ -173,6 +173,31 @@ const whiteboard = modeIsWhiteboard(params.get("mode"));
 /// checklist both need. Derived from the boolean rather than from the URL a
 /// second time, so an unrecognized value cannot reach the server as itself.
 const mode = whiteboard ? "whiteboard" : "coding";
+/// The board, and what is in flight for it.
+///
+/// Declared with the other module state rather than beside the functions that
+/// read it, for the reason `durationCeiling` in web/app.js is: `init()` runs
+/// at the top of this module and calls `initWhiteboard`, so a `const` further
+/// down the file is still in its temporal dead zone when that call reaches it.
+/// Reading one there throws, `init()` stops where it stood, and the media
+/// preflight it was on its way to start never runs: the candidate is left on
+/// "Starting camera and microphone..." with the browser never having asked for
+/// either.
+const board = {
+  model: null,
+  context: null,
+  color: PEN_COLORS[0],
+  tool: "pen",
+  settle: null,
+  /// One board at a time on the wire, chained the way integrity events are: a
+  /// settle that fires while the previous export is still uploading would open
+  /// a second stream, and the agent would show whichever finished last.
+  publishing: Promise.resolve(),
+  /// Numbers the boards so a log can tell one from the next. The agent reads
+  /// the name for nothing, and that is deliberate: it holds the newest board
+  /// it finished reading, not the highest number it has seen.
+  sequence: 0,
+};
 let behavioralMinutes = interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
 let codingMinutes = durationMin - behavioralMinutes;
 
@@ -1860,22 +1885,6 @@ const BOARD_SETTLE_MS = 1000;
 /// stops being legible to the model; above it the image outgrows what a
 /// realtime frame is worth for what it adds.
 const BOARD_JPEG_QUALITY = 0.72;
-
-const board = {
-  model: null,
-  context: null,
-  color: PEN_COLORS[0],
-  tool: "pen",
-  settle: null,
-  /// One board at a time on the wire, chained the way integrity events are: a
-  /// settle that fires while the previous export is still uploading would open
-  /// a second stream, and the agent would show whichever finished last.
-  publishing: Promise.resolve(),
-  /// Numbers the boards so a log can tell one from the next. The agent reads
-  /// the name for nothing, and that is deliberate: it holds the newest board
-  /// it finished reading, not the highest number it has seen.
-  sequence: 0,
-};
 
 /// Builds the board panel and puts it where the editor was.
 function initWhiteboard() {
