@@ -6,6 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  applyOp,
   BOARD_BACKGROUND,
   BOARD_HEIGHT,
   BOARD_WIDTH,
@@ -228,4 +229,60 @@ test("a pointer is read in board coordinates whatever the canvas is laid out at"
   // dividing by its zero width would put every stroke at NaN.
   const unlaid = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 0, height: 0 }) };
   assert.deepEqual(boardPoint(unlaid, { clientX: 10, clientY: 10 }), { x: 0, y: 0 });
+});
+
+test("the journal is the drawing, and rebuilding from it gives the same board", () => {
+  const drawn = createBoard();
+  stroke(drawn, 0, 0, 10, 10);
+  stroke(drawn, 20, 20, 30, 30, "eraser");
+  drawn.undo();
+  stroke(drawn, 40, 40, 50, 50);
+  drawn.clear();
+  // Before the next stroke, not after: drawing discards the redo stack, so a
+  // redo there is a no-op and journals nothing.
+  drawn.redo();
+  stroke(drawn, 60, 60, 70, 70);
+
+  const ops = drawn.takeOps();
+  assert.deepEqual(
+    ops.map((op) => op.op),
+    ["stroke", "stroke", "undo", "stroke", "clear", "redo", "stroke"],
+  );
+  assert.deepEqual(drawn.takeOps(), [], "taken once, not once per reader");
+
+  const rebuilt = createBoard();
+  for (const op of ops) assert.equal(applyOp(rebuilt, op), true, `${op.op} was refused`);
+  assert.deepEqual(rebuilt.strokes(), drawn.strokes());
+});
+
+test("a stroke from a recording is checked before it is drawn", () => {
+  // This arrives from a server that stored what a browser sent and hands it
+  // back verbatim, so it is exactly as trustworthy as the report payload is.
+  const board = createBoard();
+  const points = [0, 0, 10, 10];
+  for (const [color, width, bad] of [
+    ["red", 3, points],
+    ["#10141", 3, points],
+    ["#101418", 0, points],
+    ["#101418", 3, [0, 0, 10]],
+    ["#101418", 3, [0, 0, "10", 10]],
+    ["#101418", 3, []],
+    ["#101418", 3, "0,0,10,10"],
+    ["#101418", Number.POSITIVE_INFINITY, points],
+    ["#101418", ERASER_WIDTH + 1, points],
+    ["#101418", 3, new Array(MAX_POINTS * 2 + 2).fill(1)],
+  ]) {
+    assert.equal(board.push(color, width, bad), false, `${color} ${width} ${JSON.stringify(bad)}`);
+  }
+  assert.equal(board.strokeCount(), 0);
+
+  // And a well-formed one is taken, clamped onto the board.
+  assert.equal(board.push("#101418", 3, [-5, -5, BOARD_WIDTH + 5, BOARD_HEIGHT + 5]), true);
+  assert.deepEqual(board.strokes()[0].points, [0, 0, BOARD_WIDTH, BOARD_HEIGHT]);
+
+  // An operation from a later deploy is ignored rather than refused, the same
+  // way an unknown replay kind is.
+  assert.equal(applyOp(board, { op: "highlight" }), false);
+  assert.equal(applyOp(board, null), false);
+  assert.equal(board.strokeCount(), 1);
 });

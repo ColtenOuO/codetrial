@@ -8,6 +8,8 @@ import { livekitSource, read } from "./source.js";
 
 import {
   ACTIVE_CONTRACT,
+  boardOpBatches,
+  surfaceLabel,
   boardStreamOptions,
   interviewMode,
   modeIsWhiteboard,
@@ -526,6 +528,10 @@ test("sanitizeReport preserves a well-formed agent report", () => {
     interviewContract: null,
     mode: undefined,
     interviewLoop: "coding_behavioral",
+    // Absent on this one, which is a report from before whiteboard mode: the
+    // surface is kept only where the report recorded it, exactly as the loop
+    // and the legacy mode above are.
+    interviewMode: undefined,
     endReason: "interview_complete",
     rounds: [],
     codingScore: 82,
@@ -544,6 +550,24 @@ test("sanitizeReport preserves a well-formed agent report", () => {
     frameworkAssessment: null,
     frameworkEvidence: [],
   });
+});
+
+test("a report says which surface it was held on, and only when it recorded one", () => {
+  const scored = (extra) => sanitizeReport({
+    codingScore: 70, communicationScore: 70, decision: "NO_HIRE", summary: "", ...extra,
+  });
+  assert.equal(scored({ interviewMode: "whiteboard" }).interviewMode, "whiteboard");
+  assert.equal(scored({ interviewMode: "coding" }).interviewMode, "coding");
+  // A closed enum, like the loop: anything else is the editor interview rather
+  // than an error, so a hostile value cannot reach the header as itself.
+  assert.equal(scored({ interviewMode: "<script>" }).interviewMode, "coding");
+  assert.equal(scored({}).interviewMode, undefined);
+  // And an unscorable report keeps it too: which surface it was is not a score.
+  assert.equal(sanitizeReport({ incomplete: true, interviewMode: "whiteboard" }).interviewMode, "whiteboard");
+
+  assert.equal(surfaceLabel("whiteboard"), "Whiteboard");
+  assert.equal(surfaceLabel("coding"), "Editor");
+  assert.equal(surfaceLabel(undefined), "Editor");
 });
 
 test("a scored summary reaches the candidate whole", () => {
@@ -893,6 +917,28 @@ test("the two frameworks stay apart and tick only what the interviewer banked", 
   assert.equal(frameworkChecklist("nonsense", []).name, "REACTO");
   assert.deepEqual(frameworkChecklist("coding", "not-a-list").steps.filter((step) => step.done), []);
 
+  // Same ids at a whiteboard, different words. The ids are the evidence
+  // vocabulary the report and the rubric are written in; what the candidate is
+  // told the step is has to match the interview they are actually in.
+  const board = frameworkChecklist("coding", ["repeat", "coding"], "whiteboard");
+  assert.equal(board.name, "Whiteboard");
+  assert.deepEqual(board.steps.map((step) => step.id), coding.steps.map((step) => step.id));
+  assert.deepEqual(
+    board.steps.map((step) => step.label),
+    ["Repeat", "Example", "Approach", "Trace", "Edge cases", "Pseudo-code"],
+  );
+  assert.deepEqual(board.steps.filter((step) => step.done).map((step) => step.id), ["repeat", "coding"]);
+  for (const step of board.steps) {
+    assert.ok(step.hint && step.hint.length > 10, `${step.id} has no usable explanation at a board`);
+    assert.doesNotMatch(step.hint, /\btype\b|\brun\b/, `${step.id} asks for something a board cannot do`);
+  }
+
+  // The behavioral round is the same round whatever the coding half was held
+  // on, so the mode must not reach into it.
+  assert.equal(frameworkChecklist("behavioral", [], "whiteboard").name, "STAR");
+  // And an editor interview is untouched by the argument existing.
+  assert.deepEqual(frameworkChecklist("coding", ["repeat", "algorithm"], "coding"), coding);
+
   // Every step explains itself. The card is read once, while waiting, so a
   // label with no clause behind it is a step the candidate cannot act on.
   for (const framework of Object.values(FRAMEWORKS)) {
@@ -1206,6 +1252,26 @@ test("a board stream is announced on its own topic with its stroke count", () =>
     attributes: { strokes: "31" },
   });
   assert.equal(boardStreamOptions(1, 0, 10).attributes.strokes, "0");
+});
+
+test("a settle's drawing is cut into events the replay server will take", () => {
+  const stroke = (points) => ({ op: "stroke", color: "#101418", width: 3, points });
+  const short = [stroke([0, 0, 1, 1]), { op: "undo" }, stroke([2, 2, 3, 3])];
+  assert.deepEqual(boardOpBatches(short), [short], "a settle that fits travels whole");
+  assert.deepEqual(boardOpBatches([]), []);
+  assert.deepEqual(boardOpBatches(undefined), []);
+
+  // Over the budget, split rather than refused: the server rejects an oversize
+  // event outright, so a producer that sent one would lose the drawing rather
+  // than the excess.
+  const long = [stroke([0, 0, 1, 1]), stroke([2, 2, 3, 3]), stroke([4, 4, 5, 5])];
+  // 62 bytes a stroke, so a budget of 130 holds two of them and not three.
+  assert.deepEqual(boardOpBatches(long, 130), [[long[0], long[1]], [long[2]]]);
+
+  // One operation larger than the whole budget goes alone rather than being
+  // dropped or cut in half: half a stroke is a line nobody drew.
+  const huge = stroke(new Array(200).fill(7));
+  assert.deepEqual(boardOpBatches([huge, long[0]], 40), [[huge], [long[0]]]);
 });
 
 test("the contract this build scores is the shape sanitizeReport accepts", () => {

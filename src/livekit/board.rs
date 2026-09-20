@@ -37,9 +37,6 @@ use crate::runtime::TOPIC_BOARD_IMAGE;
 /// that declared nothing.
 pub(crate) const MAX_BOARD_BYTES: usize = 512 * 1024;
 
-/// What the browser encodes a board as, and what Gemini is told it is reading.
-const BOARD_MIME_TYPE: &str = "image/jpeg";
-
 /// Least time between two boards reaching Gemini.
 ///
 /// The browser already waits for the drawing to settle before it exports one,
@@ -89,6 +86,14 @@ impl Board {
     /// The end the reader tasks write finished boards to.
     pub(super) fn sender(&self) -> Sender<BoardSnapshot> {
         self.tx.clone()
+    }
+
+    /// The board as the candidate last left it, for the reviewer who has to
+    /// grade it. `None` until one arrives, which is a candidate who drew
+    /// nothing or a stream that never completed, and the report prompt says
+    /// which of those it is looking at.
+    pub(super) fn latest(&self) -> Option<&[u8]> {
+        self.latest.as_deref()
     }
 }
 
@@ -275,7 +280,9 @@ async fn send(
         return Ok(());
     };
     board.last_sent = Some(now);
-    gemini.send_video_frame(bytes, BOARD_MIME_TYPE).await
+    gemini
+        .send_video_frame(bytes, crate::gemini::GEMINI_IMAGE_MIME_TYPE)
+        .await
 }
 
 #[cfg(test)]

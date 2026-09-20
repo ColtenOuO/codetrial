@@ -1467,7 +1467,7 @@ fn static_interview_script_leaves_candidate_identity_to_the_server() {
 
     assert!(
         source
-            .contains("JSON.stringify({ problemId: problem.page, durationMin, interviewId, interviewLoop, interviewMode: whiteboard ? \"whiteboard\" : \"coding\", interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) })")
+            .contains("JSON.stringify({ problemId: problem.page, durationMin, interviewId, interviewLoop, interviewMode: mode, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) })")
     );
     assert!(!source.contains("candidateIdentity"));
 }

@@ -1662,6 +1662,7 @@ async fn handle_data_packet(
         &reason,
         interview.started_at.elapsed().as_secs_f64() / 60.0,
         &interview.config.google_api_key,
+        context.board.latest(),
     )
     .await?;
     context.gemini.shutdown().await?;

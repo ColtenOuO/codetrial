@@ -32,7 +32,13 @@ export const BOARD_BACKGROUND = "#ffffff";
 /// oldest work would have to start disappearing under the candidate, so the
 /// board stops accepting instead, which is at least visible.
 export const MAX_STROKES = 600;
-export const MAX_POINTS = 4000;
+/// Points in one stroke.
+///
+/// Sized by the replay rather than by the drawing: a stroke is journalled and
+/// stored as its points, and one event may not exceed 64 KiB, so this is the
+/// ceiling that keeps the longest single stroke a person can draw comfortably
+/// inside that. A continuous scribble at pointer rate reaches a few hundred.
+export const MAX_POINTS = 1200;
 
 /// The pens the toolbar offers. Black first: it is what a real board is
 /// written in, and the rest are for marking up what is already there.
@@ -59,6 +65,17 @@ export function strokeWidth(tool) {
   return tool === "eraser" ? ERASER_WIDTH : PEN_WIDTH;
 }
 
+/// A coordinate on the board.
+///
+/// Clamped because a pointer that leaves the canvas mid-drag still reports
+/// coordinates, and a stroke that runs to -400 draws nothing while still
+/// counting against the ceilings above; rounded because a replay stores every
+/// point and a board drawn in whole pixels is half the bytes of one drawn in
+/// fractions of them.
+function clamp(value, max) {
+  return Math.min(Math.max(Math.round(value), 0), max);
+}
+
 /// The drawing, and the history over it.
 ///
 /// `strokes` is what the board is; `undone` is what undo has taken off it, in
@@ -69,11 +86,13 @@ export function createBoard() {
   let strokes = [];
   let undone = [];
   let open = null;
-
-  /// A point on the board, clamped: a pointer that leaves the canvas mid-drag
-  /// still reports coordinates, and a stroke that runs to -400 draws nothing
-  /// while still counting against the ceiling above.
-  const clamp = (value, max) => Math.min(Math.max(Math.round(value), 0), max);
+  /// What has been done to the board since somebody last asked.
+  ///
+  /// The replay is the drawing as operations rather than as pictures, and this
+  /// is where those operations come from: the board is the only thing that
+  /// knows an edit happened, so a producer that recorded them beside it would
+  /// be a second account of the same board, free to disagree with it.
+  let journal = [];
 
   return {
     /// Everything drawn so far, oldest first, including the stroke in
@@ -117,19 +136,45 @@ export function createBoard() {
     /// the renderer draws it as one.
     end() {
       if (!open) return false;
+      journal.push({ op: "stroke", color: open.color, width: open.width, points: open.points.slice() });
       open = null;
+      return true;
+    },
+
+    /// A stroke that was drawn somewhere else: the replay and the recording
+    /// rebuild a board from the journal of the interview that produced it.
+    ///
+    /// Everything about it is checked, because it arrives from a server that
+    /// stored what a browser sent and hands it back verbatim. A stroke with a
+    /// colour that is not a colour paints whatever the canvas makes of it, and
+    /// one with an odd number of coordinates draws a line to `undefined`.
+    push(color, width, points) {
+      if (strokes.length >= MAX_STROKES) return false;
+      if (typeof color !== "string" || !/^#[0-9a-f]{6}$/i.test(color)) return false;
+      if (!Number.isFinite(width) || width <= 0 || width > ERASER_WIDTH) return false;
+      if (!Array.isArray(points) || points.length < 2 || points.length % 2 !== 0) return false;
+      if (points.length > MAX_POINTS * 2) return false;
+      if (!points.every((value) => Number.isFinite(value))) return false;
+      undone = [];
+      strokes.push({
+        color,
+        width,
+        points: points.map((value, index) => clamp(value, index % 2 === 0 ? BOARD_WIDTH : BOARD_HEIGHT)),
+      });
       return true;
     },
 
     undo() {
       if (open || strokes.length === 0) return false;
       undone.push(strokes.pop());
+      journal.push({ op: "undo" });
       return true;
     },
 
     redo() {
       if (open || undone.length === 0) return false;
       strokes.push(undone.pop());
+      journal.push({ op: "redo" });
       return true;
     },
 
@@ -140,9 +185,42 @@ export function createBoard() {
       if (open || strokes.length === 0) return false;
       undone = strokes.slice().reverse();
       strokes = [];
+      journal.push({ op: "clear" });
       return true;
     },
+
+    /// The operations since the last call, and the journal starts again.
+    ///
+    /// Taken rather than read, because the caller is the replay producer and
+    /// what it does with them is send them once. A reader that left them here
+    /// would send the whole interview's drawing with every batch.
+    takeOps() {
+      const taken = journal;
+      journal = [];
+      return taken;
+    },
   };
+}
+
+/// One journalled operation, applied to a board being rebuilt.
+///
+/// The return value is whether the board changed, which a replay uses to
+/// decide whether a stored operation was one this build understands: an
+/// unknown op is ignored rather than refused, the same way an unknown replay
+/// kind is, because a recording made by a later deploy is still worth watching.
+export function applyOp(board, op) {
+  switch (op?.op) {
+    case "stroke":
+      return board.push(op.color, op.width, op.points);
+    case "undo":
+      return board.undo();
+    case "redo":
+      return board.redo();
+    case "clear":
+      return board.clear();
+    default:
+      return false;
+  }
 }
 
 /// Paints a whole board, background included.

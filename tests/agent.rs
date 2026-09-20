@@ -286,6 +286,8 @@ fn prompt_samples() -> Value {
         "testsSetupError": test_setup_error_reaction("The runner could not start."),
         "report": report_prompt(ReportPromptInput {
             problem,
+            interview_mode: InterviewMode::Coding,
+            board_attached: false,
             transcript: "Candidate: I will use a hash map.",
             rolling_assessment: "",
             final_code: "def two_sum(nums, target): return []",
@@ -295,8 +297,36 @@ fn prompt_samples() -> Value {
             elapsed_min: 12.4,
             test_summary: "Latest test run: 2/3 cases passed.",
         }),
+        "boardReport": report_prompt(ReportPromptInput {
+            problem,
+            interview_mode: InterviewMode::Whiteboard,
+            board_attached: true,
+            transcript: "Candidate: I will keep a map of what I have seen.",
+            rolling_assessment: "",
+            final_code: "",
+            language: "python",
+            hints_used: 1,
+            duration_min: 45,
+            elapsed_min: 31.0,
+            test_summary: "",
+        }),
+        "boardReportNoBoard": report_prompt(ReportPromptInput {
+            problem,
+            interview_mode: InterviewMode::Whiteboard,
+            board_attached: false,
+            transcript: "Candidate: I would rather talk it through.",
+            rolling_assessment: "",
+            final_code: "",
+            language: "python",
+            hints_used: 0,
+            duration_min: 45,
+            elapsed_min: 8.0,
+            test_summary: "",
+        }),
         "reportEmpty": report_prompt(ReportPromptInput {
             problem,
+            interview_mode: InterviewMode::Coding,
+            board_attached: false,
             transcript: "",
             rolling_assessment: "",
             final_code: "",
@@ -308,6 +338,8 @@ fn prompt_samples() -> Value {
         }),
         "reportHalfElapsed": report_prompt(ReportPromptInput {
             problem,
+            interview_mode: InterviewMode::Coding,
+            board_attached: false,
             transcript: "",
             rolling_assessment: "",
             final_code: "",
@@ -324,6 +356,8 @@ fn prompt_samples() -> Value {
         // could then drift and nothing would notice.
         "reportProgressive": report_prompt(ReportPromptInput {
             problem,
+            interview_mode: InterviewMode::Coding,
+            board_attached: false,
             transcript: "Candidate: I will use a hash map.",
             rolling_assessment: &rolling_assessment(
 
@@ -350,6 +384,8 @@ fn prompt_samples() -> Value {
         }),
         "reportMultiline": report_prompt(ReportPromptInput {
             problem,
+            interview_mode: InterviewMode::Coding,
+            board_attached: false,
             transcript: "Candidate: I will use a hash map.",
             rolling_assessment: "",
             final_code: "def two_sum(nums, target):\n    return [0, 1]",
@@ -1491,6 +1527,8 @@ fn live_instructions_pose_the_variant_and_hold_no_source_or_walkthrough() {
     // the notes from both places cannot pass as keeping them private.
     let report = report_prompt(ReportPromptInput {
         problem: three_sum,
+        interview_mode: InterviewMode::Coding,
+        board_attached: false,
         transcript: "",
         rolling_assessment: "",
         final_code: "",
@@ -1625,6 +1663,8 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
         let test_summary = case["testSummary"].as_str().expect("case has tests");
         let prompt = report_prompt(ReportPromptInput {
             problem: get_problem(Some("two-sum")),
+            interview_mode: InterviewMode::Coding,
+            board_attached: false,
             transcript,
             rolling_assessment: "",
             final_code,
@@ -1771,6 +1811,8 @@ fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
         }
         "report" => report_prompt(ReportPromptInput {
             problem: get_problem(Some("two-sum")),
+            interview_mode: InterviewMode::Coding,
+            board_attached: false,
             transcript: case["transcript"].as_str().expect("transcript is text"),
             rolling_assessment: "",
             final_code: code,
@@ -5157,11 +5199,85 @@ fn a_board_reports_its_own_age_and_an_empty_one_says_so() {
     assert_eq!(board_age_seconds(&state), Some(0));
 }
 
+/// The reviewer of a whiteboard interview is pointed at the board and at
+/// nothing that does not exist.
+///
+/// The editor half is asserted in the same test for the reason the live prompt
+/// is: the two are now one function with a branch in it, and the failure this
+/// catches is an edit to one arm that was meant for both.
+#[test]
+fn the_report_cites_the_surface_the_interview_was_held_on() {
+    let problem = get_problem(Some("two-sum"));
+    let board = |attached| {
+        report_prompt(ReportPromptInput {
+            problem,
+            interview_mode: InterviewMode::Whiteboard,
+            board_attached: attached,
+            transcript: "Candidate: here is the map I am keeping.",
+            rolling_assessment: "",
+            final_code: "",
+            language: "python",
+            hints_used: 0,
+            duration_min: 45,
+            elapsed_min: 20.0,
+            test_summary: "",
+        })
+    };
+
+    let attached = board(true);
+    for absent in [
+        "FINAL CODE",
+        "TEST-CASE EXECUTION",
+        "Judge correctness by reading the code",
+        "the candidate saying",
+    ] {
+        assert!(
+            !attached.contains(absent),
+            "the whiteboard report still says {absent:?}"
+        );
+    }
+    assert!(attached.contains("The image attached to this message"));
+    assert!(attached.contains("NOTHING RAN"));
+    // The phases keep their names in the schema, so the reviewer is told what
+    // those names meant at a board rather than being given new ones.
+    assert!(attached.contains("Coding is the trace they walked"));
+    assert!(attached.contains(r#""phase": "Coding""#));
+
+    // A whiteboard interview with no board must not send the reviewer looking
+    // for an attachment that is not there.
+    let missing = board(false);
+    assert!(!missing.contains("The image attached to this message"));
+    assert!(missing.contains("no board reached this review"));
+
+    // And the editor's report is unchanged by any of it.
+    let editor = report_prompt(ReportPromptInput {
+        problem,
+        interview_mode: InterviewMode::Coding,
+        board_attached: false,
+        transcript: "Candidate: here is the map I am keeping.",
+        rolling_assessment: "",
+        final_code: "seen = {}",
+        language: "python",
+        hints_used: 0,
+        duration_min: 45,
+        elapsed_min: 20.0,
+        test_summary: "",
+    });
+    assert!(editor.contains("FINAL CODE (python)"));
+    assert!(editor.contains("TEST-CASE EXECUTION"));
+    for absent in ["board", "NOTHING RAN"] {
+        assert!(
+            !editor.contains(absent),
+            "the editor report has gained {absent:?}"
+        );
+    }
+}
+
 #[test]
 fn interview_contract_versions_are_one_closed_bundle() {
     assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 7);
     assert_eq!(LIVE_PROMPT_VERSION, 4);
-    assert_eq!(REPORT_PROMPT_VERSION, 5);
+    assert_eq!(REPORT_PROMPT_VERSION, 6);
     assert_eq!(RUBRIC_VERSION, 1);
     assert_eq!(REPORT_SCHEMA_VERSION, 1);
     assert_eq!(
@@ -5169,7 +5285,7 @@ fn interview_contract_versions_are_one_closed_bundle() {
         json!({
             "bundleVersion": 7,
             "livePromptVersion": 4,
-            "reportPromptVersion": 5,
+            "reportPromptVersion": 6,
             "rubricVersion": 1,
             "reportSchemaVersion": 1,
         })

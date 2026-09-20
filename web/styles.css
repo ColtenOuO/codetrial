@@ -1385,6 +1385,29 @@ p {
   white-space: pre;
 }
 
+/* The board on the report card, under the same disclosure the code block uses.
+   Bounded by the panel rather than drawn at the board's own size, which is
+   wider than the card. */
+.report-board {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+/* The board in a replay, where the code would be. Scaled to the panel rather
+   than scrollable like the live one: this is a picture of finished work being
+   read, not a surface anybody is drawing on. */
+.replay-board {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1600 / 1000;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
 /* One framework's steps, top left under the problem heading. Small on purpose:
    it is a place marker during an interview, not a panel to study, and the
    candidate's attention belongs in the editor. */

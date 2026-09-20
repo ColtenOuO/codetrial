@@ -115,7 +115,7 @@ pub const TIME_WARNING_S: u64 = 300;
 
 pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 7;
 pub const LIVE_PROMPT_VERSION: u32 = 4;
-pub const REPORT_PROMPT_VERSION: u32 = 5;
+pub const REPORT_PROMPT_VERSION: u32 = 6;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 1;
 

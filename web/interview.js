@@ -30,6 +30,7 @@ import {
 } from "./render.js";
 import {
   acceptsReport,
+  boardOpBatches,
   boardStreamOptions,
   clamp,
   codeUpdatePayload,
@@ -168,6 +169,10 @@ const interviewLoop = codingLoop(params.get("loop"));
 /// the answer would leave the editor bound and the starter code published in
 /// an interview that has neither.
 const whiteboard = modeIsWhiteboard(params.get("mode"));
+/// The same answer as the wire spelling, which the token request and the
+/// checklist both need. Derived from the boolean rather than from the URL a
+/// second time, so an unrecognized value cannot reach the server as itself.
+const mode = whiteboard ? "whiteboard" : "coding";
 let behavioralMinutes = interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
 let codingMinutes = durationMin - behavioralMinutes;
 
@@ -756,7 +761,7 @@ async function connect(preflight, presenting = false) {
     const response = await fetch("/api/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ problemId: problem.page, durationMin, interviewId, interviewLoop, interviewMode: whiteboard ? "whiteboard" : "coding", interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) }),
+      body: JSON.stringify({ problemId: problem.page, durationMin, interviewId, interviewLoop, interviewMode: mode, interviewProfile, ...(interviewGrounding ? { interviewGrounding } : {}) }),
     });
     if (!response.ok) throw new Error((await response.json()).error || "Failed to create a session.");
     const connection = await response.json();
@@ -1312,7 +1317,7 @@ let endingClock = 0;
 /// would need its own record of what is already ticked, which is the second
 /// copy of the truth that these packets exist to avoid.
 function renderFrameworkProgress() {
-  const { name, steps } = frameworkChecklist(frameworkRound, frameworkPhases);
+  const { name, steps } = frameworkChecklist(frameworkRound, frameworkPhases, mode);
   nodes.frameworkProgress.hidden = false;
   nodes.frameworkProgress.innerHTML = steps
     .map((step) => `<li class="${step.done ? "done" : ""}"><span aria-hidden="true">${step.done ? "&#10003;" : "&#183;"}</span>${escapeHtml(step.label)}</li>`)
@@ -1327,7 +1332,12 @@ function renderFrameworkProgress() {
 /// two-framework list beside the timer already was.
 function showFrameworkHint() {
   nodes.frameworkHintTitle.textContent = "Jim is listening.";
-  nodes.frameworkHintBody.innerHTML = Object.values(FRAMEWORKS)
+  // Through the checklist rather than from `FRAMEWORKS` directly, so the card
+  // and the list beside the timer name the steps the same way: at a board this
+  // said "write what you just described" and "predict what should happen, then
+  // run it" to a candidate holding a marker.
+  nodes.frameworkHintBody.innerHTML = Object.keys(FRAMEWORKS)
+    .map((round) => frameworkChecklist(round, [], mode))
     .map((framework) => `
       <table>
         <caption>${escapeHtml(framework.name)}<span>${escapeHtml(framework.scenario)}</span></caption>
@@ -1509,6 +1519,14 @@ function endInterview(reason) {
   // "ended" nobody sent leaves a replay that just stops. Inside a Retry-After
   // window the flush sends nothing and the event still waits on that timer,
   // so a tab closed before the window passes loses it.
+  // Before the lifecycle row, so the drawing a candidate was still working on
+  // when they pressed End is in the replay ahead of the event that says the
+  // interview stopped. The settle timer is about to be irrelevant: this page
+  // stops being one that runs timers a moment from now.
+  if (whiteboard) {
+    clearTimeout(board.settle);
+    recordBoardOps();
+  }
   recordReplay("lifecycle", { state: "ended", reason });
   void flushReplay();
   // The end_interview payload carries the final buffer, so drop any debounced
@@ -1634,6 +1652,7 @@ function renderReport() {
     problemTitle: problem.title,
     language: state.language,
     code: currentCode(),
+    board: finalBoardImage(),
     saveResult: null,
   });
   mountBehavioralReview(nodes.report, state.transcript.values());
@@ -1651,7 +1670,10 @@ function saveHistory() {
   // The interview id travels with the report so the replay page can put the
   // two beside each other. Reports are keyed by their own id and recordings by
   // theirs, and without this the only thing relating them is the clock.
-  const entry = { id: randomId(), date: new Date().toISOString(), interviewId: state.interviewId, problemId: problem.page, problemTitle: problem.title, difficulty: problem.difficulty, language: state.language, durationMin, interviewLoop, report: state.report };
+  // No language at a whiteboard: nothing is compiled, the tabs are not on
+  // screen, and `state.language` is the default nobody chose. Recorded as one,
+  // it would filter the candidate's own history by a choice they never made.
+  const entry = { id: randomId(), date: new Date().toISOString(), interviewId: state.interviewId, problemId: problem.page, problemTitle: problem.title, difficulty: problem.difficulty, language: whiteboard ? "" : state.language, durationMin, interviewLoop, report: state.report };
   return saveReportHistory(entry);
 }
 
@@ -1674,6 +1696,7 @@ function buildMarkdown() {
     problemTitle: problem.title,
     language: state.language,
     code: currentCode(),
+    board: finalBoardImage(),
     transcript: state.transcript.values(),
     at: new Date().toLocaleString(),
   });
@@ -1951,10 +1974,49 @@ function scheduleBoardPublish() {
   clearTimeout(board.settle);
   board.settle = setTimeout(() => {
     board.settle = null;
+    recordBoardOps();
     board.publishing = board.publishing.then(publishBoard).catch((error) => {
       console.warn("codetrial board_publish_failed", error);
     });
   }, BOARD_SETTLE_MS);
+}
+
+/// The board as the candidate left it, for their own report card.
+///
+/// Read off the page's own canvas rather than from anything that came back
+/// from a server, and `undefined` for an editor interview, which is what tells
+/// the card to show the code block instead. Not saved with the report: the
+/// data URL is a hundred kilobytes and the saved report has a quota, and the
+/// recording is where a board is kept.
+function finalBoardImage() {
+  if (!whiteboard) return undefined;
+  try {
+    return nodes.board.toDataURL("image/jpeg", BOARD_JPEG_QUALITY);
+  } catch (error) {
+    // A canvas that will not export is not a reason to lose the report. The
+    // card says the board could not be read rather than showing an empty code
+    // block under a language nobody chose.
+    console.warn("codetrial board_export_failed", error);
+    return "";
+  }
+}
+
+/// The drawing since the last settle, onto the replay.
+///
+/// Operations, not the image the interviewer is sent: a replay event is
+/// bounded in kilobytes and a board is a hundred of them, so what a recording
+/// keeps is what drew the board rather than a photograph of it every second.
+/// The replay page and the recording template rebuild it with the same module
+/// the candidate drew on.
+///
+/// The journal is drained whether or not this interview is being recorded. It
+/// is the board's own record of what has happened to it since somebody asked,
+/// and left unasked for an hour it is every stroke of the interview held in
+/// memory twice.
+function recordBoardOps() {
+  for (const ops of boardOpBatches(board.model.takeOps())) {
+    recordReplay("board", { ops });
+  }
 }
 
 /// Sends the board as one JPEG over its own byte stream.

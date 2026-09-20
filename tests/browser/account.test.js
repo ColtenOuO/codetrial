@@ -133,7 +133,7 @@ test("the lobby offers one interview and carries no mode to the room", () => {
   assert.match(interview, /message\.type === "framework_state" && Array\.isArray\(message\.phases\)/);
   assert.match(interview, /frameworkRound = "behavioral"/);
   assert.match(interview, /globalThis\.setTimeout\(\(\) => \{\s*nodes\.frameworkHint\.hidden = true;/);
-  assert.match(interview, /JSON\.stringify\(\{ problemId: problem\.page, durationMin, interviewId, interviewLoop, interviewMode: whiteboard \? "whiteboard" : "coding", interviewProfile, \.\.\.\(interviewGrounding/);
+  assert.match(interview, /JSON\.stringify\(\{ problemId: problem\.page, durationMin, interviewId, interviewLoop, interviewMode: mode, interviewProfile, \.\.\.\(interviewGrounding/);
   assert.match(interview, /interviewLoop, report: state\.report/);
 });
 
