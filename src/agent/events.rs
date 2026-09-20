@@ -8,9 +8,9 @@
 use super::{
     DataEventResult, InterviewLoop, LanguageChoiceContext, MAX_INTEGRITY_EVENTS,
     ROUND_TRANSITION_SKEW, RuntimeState, TIME_WARNING_S, cold_restart, format_test_run,
-    integrity_hash, json_int, language_choice, python_truthy, sanitize_integrity_event,
-    sanitize_test_run, spoken_language, spoken_minutes_from_remaining_seconds,
-    test_reaction_decision, test_results_reaction, test_setup_error_reaction, time_warning,
+    integrity_hash, language_choice, python_truthy, sanitize_integrity_event, sanitize_test_run,
+    spoken_language, test_reaction_decision, test_results_reaction, test_setup_error_reaction,
+    time_warning,
 };
 use crate::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_TEST_RESULTS};
 
@@ -26,13 +26,21 @@ pub fn apply_data_event(
     if state.paused && matches!(topic, TOPIC_CODE_UPDATE | TOPIC_TEST_RESULTS) {
         return DataEventResult::default();
     }
-    match topic {
+    let mut result = match topic {
         TOPIC_CODE_UPDATE => apply_code_update(state, payload),
         TOPIC_TEST_RESULTS => apply_test_results(state, payload, since_last_test_reaction_seconds),
         TOPIC_CONTROL => apply_control(state, payload),
         TOPIC_INTEGRITY => apply_integrity(state, payload),
         _ => DataEventResult::default(),
-    }
+    };
+
+    // Stamped here rather than in each arm, because the reading is the same
+    // fact for all of them and an arm added later would otherwise be the one
+    // stage direction that leaves the interviewer guessing again.
+    result.generate_reply = result
+        .generate_reply
+        .map(|prompt| crate::agent::with_timer(state, prompt));
+    result
 }
 
 /// The id and its spoken form, or nothing at all when the browser sent
@@ -207,7 +215,7 @@ fn apply_control(state: &mut RuntimeState, payload: &serde_json::Value) -> DataE
                 && !state.time_warning_seen
                 && time_warning_is_due(state) =>
         {
-            control_time_warning(state, payload)
+            control_time_warning(state)
         }
         Some("end_interview") if !state.ended => control_end_interview(state, payload),
         _ => DataEventResult::default(),
@@ -294,20 +302,13 @@ fn time_warning_is_due(state: &RuntimeState) -> bool {
 /// may have arrived while this side was paused. Remembering an accepted warning
 /// here lets that retry through when needed while refusing it after it already
 /// interrupted the candidate.
-fn control_time_warning(state: &mut RuntimeState, payload: &serde_json::Value) -> DataEventResult {
+fn control_time_warning(state: &mut RuntimeState) -> DataEventResult {
     state.time_warning_seen = true;
-    let remaining_seconds = payload
-        .get("remainingSeconds")
-        .and_then(json_int)
-        .unwrap_or(300);
-    let minutes = spoken_minutes_from_remaining_seconds(remaining_seconds) as u32;
     DataEventResult {
         generate_reply: Some(if state.behavioral_round_started {
-            format!(
-                "[SYSTEM EVENT] Exactly {minutes} minutes remain in the active behavioral round. Do not return to coding or ask a new question. Let the candidate finish the current answer, ask at most the one permitted neutral missing-STAR follow-up, then close naturally."
-            )
+            "[SYSTEM EVENT] The behavioral round has reached the five-minute warning. Do not return to coding or ask a new question. Let the candidate finish the current answer, ask at most the one permitted neutral missing-STAR follow-up, then close naturally.".to_string()
         } else {
-            time_warning(minutes)
+            time_warning()
         }),
         ..DataEventResult::default()
     }

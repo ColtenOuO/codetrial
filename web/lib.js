@@ -410,21 +410,22 @@ const textEncoder = new TextEncoder();
 /// function-local, moving it left the whole suite green with the supported-card
 /// branch no longer rendering, which is the defect a local constant invites.
 export const ACTIVE_CONTRACT = {
-  bundleVersion: 5,
-  livePromptVersion: 2,
+  bundleVersion: 6,
+  livePromptVersion: 3,
   reportPromptVersion: 5,
   reportSchemaVersion: 1,
   rubricVersion: 1,
 };
 
 /// The bundles this build scores: the active one, and earlier ones whose rubric
-/// and report schema are the active ones. Bundle 4 differs from 5 only in the
-/// prompts that produced the report, so what its scores mean is unchanged, and
-/// refusing it would blank the scores on every report saved before bundle 5.
-/// The report keeps the bundle it claims, so its card still says which prompts
-/// wrote it.
+/// and report schema are the active ones. Bundles 4 and 5 differ from 6 only in
+/// the prompts that produced the report, so what their scores mean is
+/// unchanged, and refusing them would blank the scores on every report saved
+/// before bundle 6. The report keeps the bundle it claims, so its card still
+/// says which prompts wrote it.
 export const SCORABLE_CONTRACTS = [
   ACTIVE_CONTRACT,
+  { ...ACTIVE_CONTRACT, bundleVersion: 5, livePromptVersion: 2 },
   { ...ACTIVE_CONTRACT, bundleVersion: 4, livePromptVersion: 1, reportPromptVersion: 4 },
 ];
 

@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use crate::agent::{
     RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput, candidate_lines, numbered,
     proactive_review, significant_change, silence_nudge, timing_decision, unreviewed_from,
+    with_timer,
 };
 
 /// How long the room has to be quiet before a pause is worth reading into.
@@ -258,10 +259,10 @@ impl RuntimeActivity {
             self.code_at_last_review = state.code.clone();
         }
         if decision.silence_nudge {
-            return Some(silence_nudge(&numbered(&state.code)));
+            return Some(with_timer(state, silence_nudge(&numbered(&state.code))));
         }
         if decision.proactive_review {
-            return Some(proactive_review(&numbered(&state.code)));
+            return Some(with_timer(state, proactive_review(&numbered(&state.code))));
         }
         None
     }

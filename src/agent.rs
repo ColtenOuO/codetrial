@@ -113,8 +113,8 @@ const ROUND_TRANSITION_SKEW: std::time::Duration = std::time::Duration::from_sec
 /// `the_time_warning_threshold_is_the_same_number_on_both_sides`.
 pub const TIME_WARNING_S: u64 = 300;
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 5;
-pub const LIVE_PROMPT_VERSION: u32 = 2;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 6;
+pub const LIVE_PROMPT_VERSION: u32 = 3;
 pub const REPORT_PROMPT_VERSION: u32 = 5;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 1;
@@ -1468,6 +1468,49 @@ pub fn spoken_minutes_from_remaining_seconds(remaining_seconds: i64) -> i64 {
     ((remaining_seconds as f64) / 60.0)
         .round_ties_even()
         .max(1.0) as i64
+}
+
+/// What the candidate's countdown reads, in whole minutes.
+///
+/// Wall time, because the page's deadline is wall time too: a pause stops the
+/// conversation and not the clock, as `tickTimer` in `web/interview.js` says
+/// at the other end of the same decision.
+pub fn minutes_left(state: &RuntimeState) -> i64 {
+    let planned = i64::from(state.coding_minutes + state.behavioral_minutes) * 60;
+    let elapsed = i64::try_from(state.started_at.elapsed().as_secs()).unwrap_or(i64::MAX);
+    let remaining = planned.saturating_sub(elapsed);
+
+    // Not `spoken_minutes_from_remaining_seconds`, whose floor of one is what
+    // the spoken warning wants and the opposite of what a reading wants. The
+    // deadline grace runs two minutes past zero, and through all of it that
+    // floor would report a minute the candidate's screen does not have.
+    if remaining <= 0 {
+        return 0;
+    }
+    spoken_minutes_from_remaining_seconds(remaining)
+}
+
+/// The one sentence any prompt says the time in, so a model told these are the
+/// only readings it has can recognize every one of them.
+pub fn timer_line(minutes: i64) -> String {
+    format!("TIMER: about {minutes} minutes remain on the candidate's countdown.")
+}
+
+/// A stage direction, with the clock the model does not have.
+///
+/// Told the duration once and warned once at five minutes, it guessed at
+/// everything in between, and it guessed the one number its instructions name:
+/// five minutes remaining with fifteen still on the timer, and a candidate
+/// hurried into wrapping up.
+pub fn with_timer(state: &RuntimeState, prompt: String) -> String {
+    // Stamped whatever the prompt already says. Most of these carry the
+    // candidate's own code, so skipping a prompt that reads as stamped would
+    // let anyone who types the sentence into the editor decide that this event
+    // carries no reading at all -- or, worse, that the only one it carries is
+    // theirs. The reading is always the last sentence, and the live prompt says
+    // so, which is the rule the model needs when a stamp it cannot trust sits
+    // somewhere above.
+    format!("{prompt} {}", timer_line(minutes_left(state)))
 }
 
 pub fn parse_participant_metadata(metadata: Option<&str>) -> MetadataConfig {
