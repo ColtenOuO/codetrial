@@ -362,5 +362,6 @@ test("the interview reads the focus from session storage, never from its address
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../../web/interview.js", import.meta.url), "utf8");
   assert.doesNotMatch(source, /params\.get\("focus"\)/);
-  assert.match(source, /practiceFocus: consumeSharedFocus\(sessionStorage\)/);
+  assert.match(source, /practiceFocus: consumeSharedFocus\(tabStorage\)/);
+  assert.match(source, /const tabStorage = storageArea\("sessionStorage"\);/);
 });

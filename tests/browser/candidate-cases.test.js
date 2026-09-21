@@ -129,6 +129,35 @@ test("candidate cases run when session storage cannot be written", async (t) => 
   }
 });
 
+// Blocked site data fails a step earlier than a refused write: reading the
+// `sessionStorage` global itself throws. Resolving it at the call site put
+// that throw after the case was pushed, so the run stopped over a valid case
+// and the next attempt added it a second time.
+test("candidate cases run when session storage cannot be reached", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage();
+  try {
+    await page.addInitScript(() => {
+      Object.defineProperty(window, "sessionStorage", {
+        get() {
+          throw new DOMException("blocked", "SecurityError");
+        },
+      });
+    });
+    await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, { waitUntil: "domcontentloaded" });
+    await candidateCasesReady(page);
+    await page.evaluate(() => {
+      document.querySelector("#candidate-case-input").value = "[[2,7,11,15],9]";
+      document.querySelector('[data-language="javascript"]').click();
+      document.querySelector("#run-tests").click();
+    });
+    await page.waitForFunction(() => document.querySelector("#results-body").textContent.includes("Your case 1"));
+    assert.equal(await page.locator("#candidate-case-list").evaluate((list) => list.children.length), 1);
+  } finally {
+    await page.close();
+  }
+});
+
 // The list length alone proves nothing here: the handler clears the input on
 // success, so the later clicks would fail to parse an empty string and leave
 // one case behind whether or not the button was disabled. What the guard

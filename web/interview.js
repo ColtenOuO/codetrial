@@ -68,6 +68,7 @@ import {
   initAudioOutput,
   readStored,
   refreshAudioOutputs,
+  storageArea,
   writeStored,
 } from "./audio-output.js";
 import {
@@ -187,13 +188,16 @@ function renderRoundPlan() {
     ? `Coding-only loop · ${codingMinutes} minute coding budget.`
     : `Coding + behavioral loop · ${codingMinutes} minute coding budget · ${behavioralMinutes} minute behavioral reserve.`;
 }
+/// Read once, through `storageArea`: at module scope a blocked `sessionStorage`
+/// would otherwise stop the whole page from loading.
+const tabStorage = storageArea("sessionStorage");
 const interviewProfile = {
   role: params.get("role") || "",
   seniority: params.get("seniority") || "",
   targetCompany: params.get("company") || "",
-  practiceFocus: consumeSharedFocus(sessionStorage),
+  practiceFocus: consumeSharedFocus(tabStorage),
 };
-const interviewGrounding = consumeGroundingPacket(sessionStorage);
+const interviewGrounding = consumeGroundingPacket(tabStorage);
 const state = {
   paused: false,
   codeByLanguage: { ...problem.starterCode },
@@ -1490,7 +1494,7 @@ async function runTests() {
 
 async function initializeCandidateCases() {
   try {
-    const saved = JSON.parse(sessionStorage.getItem(candidateCaseStorageKey) || "[]");
+    const saved = JSON.parse(readStored(candidateCaseStorageKey, tabStorage) || "[]");
     state.candidateCases = Array.isArray(saved) ? saved.slice(0, CANDIDATE_CASE_LIMIT) : [];
   } catch {
     state.candidateCases = [];
@@ -1537,9 +1541,7 @@ async function addCandidateCaseNow() {
     }
     const testCase = { input, ...(expectedText ? { expected } : {}) };
     state.candidateCases.push(testCase);
-    try {
-      sessionStorage.setItem(candidateCaseStorageKey, JSON.stringify(state.candidateCases));
-    } catch { /* the case still works for this visit */ }
+    writeStored(candidateCaseStorageKey, JSON.stringify(state.candidateCases), tabStorage);
     nodes.candidateCaseInput.value = "";
     nodes.candidateCaseExpected.value = "";
     nodes.candidateCaseStatus.textContent = "Case added.";

@@ -178,7 +178,7 @@ test("optional interview profile is accessible, bounded, and omitted when blank"
   // The focus travels in session storage, never the address bar.
   assert.match(app, /storeSharedFocus\(sessionStorage, focus\?\.weakness \?\? null\)/);
   assert.doesNotMatch(app, /searchParams\.set\("focus"/);
-  assert.match(interview, /practiceFocus: consumeSharedFocus\(sessionStorage\)/);
+  assert.match(interview, /practiceFocus: consumeSharedFocus\(tabStorage\)/);
 });
 
 test("document grounding is explicit, clearable, ephemeral, and absent from saved artifacts", () => {
@@ -191,7 +191,7 @@ test("document grounding is explicit, clearable, ephemeral, and absent from save
   assert.match(lobby, /Send only my selected snippets to the AI interviewer\./);
   assert.match(app, /nodes\.groundingClear\.addEventListener\("click", clearGrounding\)/);
   assert.match(app, /storeGroundingPacket\(sessionStorage, packet\)/);
-  assert.match(interview, /consumeGroundingPacket\(sessionStorage\)/);
+  assert.match(interview, /consumeGroundingPacket\(tabStorage\)/);
   const savedArtifacts = [read("history.js"), read("replay-feed.js"), functionBody(interview, "saveHistory")];
   for (const source of savedArtifacts) {
     assert.doesNotMatch(source, /interviewGrounding/);
