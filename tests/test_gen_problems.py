@@ -105,8 +105,11 @@ class VariantValidationTests(unittest.TestCase):
         "difficulty": "Medium",
         "topics": ["Dynamic Programming"],
         "statement": ["Given coins and an amount, return the fewest coins."],
+        "summary": "Return the fewest coins summing to amount, or -1.",
         "examples": [{"input": "coins = [1,2,5], amount = 11", "output": "3"}],
         "constraints": ["0 <= amount <= 10^4"],
+        "optimal": "Bottom-up dynamic programming over coins and amount.",
+        "pitfalls": "Forgetting that coins may overshoot the amount.",
         "starterCode": {
             "python": "class Solution:\n    def coinChange(self, coins, amount):\n        pass\n",
             "javascript": "function coinChange(coins, amount) {\n}\n",
@@ -233,7 +236,7 @@ class VariantValidationTests(unittest.TestCase):
         starter = {
             "starterCode": {
                 "c": "int* fewestTokens(int* values, int* returnSize) { return 0; }"
-            }
+            },
         }
         with self.assertRaisesRegex(RuntimeError, "coin-change"):
             GEN.check_c_return_size_ownership("coin-change", starter)
@@ -306,6 +309,43 @@ class VariantValidationTests(unittest.TestCase):
             "contract names the source title", contract="Coin change, renamed."
         )
 
+    def test_the_reference_notes_are_posed_like_the_rest_of_the_prose(self):
+        """`optimal` and `pitfalls` reach the candidate, so they are renamed.
+
+        Both are interpolated into the live prompt, where the interviewer may
+        read either aloud, and stamped into the debrief the candidate keeps.
+        They were the last candidate-visible prose still written in published
+        names, and the server filtered them at the boundary instead.
+        """
+        posed = GEN.validated_variant(self.problem, self.judge, self.variant)
+        self.assertIn("tokens", posed["problem"]["optimal"])
+        self.assertNotIn("coins", posed["problem"]["optimal"])
+        self.assertNotIn("coins", posed["problem"]["pitfalls"])
+        # The entry point stays, because in a sentence it is a verb rather than
+        # a name: substituting it turns "take one jump" into "take one
+        # fewestFlights". `check_labels` declines it in labels for the same
+        # reason. `summary` stays published: only `report_brief` reads it, and
+        # that prompt is handed the published problem deliberately.
+        self.assertNotIn("fewestTokens", posed["problem"]["optimal"])
+        self.assertEqual(posed["problem"]["summary"], self.problem["summary"])
+
+    def test_the_reference_notes_may_not_name_the_source(self):
+        for field in ("optimal", "pitfalls"):
+            with self.assertRaisesRegex(
+                RuntimeError, f"{field} names the source title"
+            ):
+                GEN.validated_variant(
+                    {**self.problem, field: "Coin Change, the classic exercise."},
+                    self.judge,
+                    self.variant,
+                )
+            with self.assertRaisesRegex(RuntimeError, "source site"):
+                GEN.validated_variant(
+                    {**self.problem, field: "As posed on LeetCode."},
+                    self.judge,
+                    self.variant,
+                )
+
     def test_a_function_problem_takes_a_new_entry_point(self):
         self.rejects("not a new name", entry="coinChange")
         self.rejects("not a new name", entry="COIN_change")
@@ -322,6 +362,8 @@ class VariantValidationTests(unittest.TestCase):
             **self.problem,
             "id": "lru-cache",
             "title": "LRU Cache",
+            "optimal": "Scan once and keep a running total.",
+            "pitfalls": "Forgetting the empty input.",
             "starterCode": {
                 "python": "class LRUCache:\n    def get(self, key): pass\n",
                 "c": "LRUCache* lRUCacheCreate(int capacity) {}\nint lRUCacheGet(LRUCache* obj, int key) {}\n",
@@ -429,6 +471,8 @@ class VariantValidationTests(unittest.TestCase):
         self.rejects("judge case 'sentence' names the source title", judge=judge)
         problem = {
             **self.problem,
+            "optimal": "Scan once and keep a running total.",
+            "pitfalls": "Forgetting the empty input.",
             "starterCode": {"python": "# Coin Change\ndef fewestTokens(): pass\n"},
         }
         with self.assertRaisesRegex(

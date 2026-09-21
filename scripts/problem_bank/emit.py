@@ -142,11 +142,14 @@ pub const PROBLEM_TOPICS: &[(&str, &[&str])] = &[\n"""
 def rust_rubrics(problems: list[dict], variants: dict) -> str:
     rows = []
     for problem in problems:
-        title = (
-            problem["title"]
-            if is_imported(problem)
-            else variants[problem["id"]]["variant"]["title"]
-        )
+        entry = variants[problem["id"]]
+        title = problem["title"] if is_imported(problem) else entry["variant"]["title"]
+        # `optimal` and `pitfalls` come from the posed entry, not the raw bank
+        # row: both are interpolated into the live prompt and stamped into the
+        # candidate's debrief, so they carry the scenario's names like every
+        # other piece of prose. `summary` stays raw because only `report_brief`
+        # reads it, and that prompt is given the published problem on purpose.
+        posed_problem = entry["problem"]
         rows.append(
             "\n".join(
                 [
@@ -155,8 +158,8 @@ def rust_rubrics(problems: list[dict], variants: dict) -> str:
                     f"        title: {rust_str(title)},",
                     f"        difficulty: {rust_str(problem['difficulty'])},",
                     f"        summary: {rust_str(problem['summary'])},",
-                    f"        optimal: {rust_str(problem['optimal'])},",
-                    f"        pitfalls: {rust_str(problem['pitfalls'])},",
+                    f"        optimal: {rust_str(posed_problem['optimal'])},",
+                    f"        pitfalls: {rust_str(posed_problem['pitfalls'])},",
                     "    },",
                 ]
             )

@@ -422,16 +422,30 @@ def posed(problem: dict, judge: dict, variant: dict) -> tuple[dict, dict]:
             text = re.sub(rf"\b{re.escape(old)}(?=[A-Z])", new, text)
         return text
 
+    def reworded(text: str) -> str:
+        """Prose, so only the names that are nouns in it are substituted.
+
+        An entry point is usually an English verb: `jump`, `trap`, `rotate`,
+        `merge`, `search`, `rob`. Running the full rename over a sentence turns
+        "take one jump" into "take one fewestFlights", which is not a leak
+        fixed but a sentence broken. Parameters and terms are the names that
+        actually identify the published exercise in prose, and they read as
+        nouns where they appear. `check_labels` declines the entry point in
+        case labels for the same reason.
+
+        One pass, so a rename cannot feed the next one: a new name that is
+        also a published one stays put.
+        """
+        return re.sub(
+            r"\b\w+\b", lambda word: worded.get(word.group(), word.group()), text
+        )
+
     judge = {
         **judge,
         "cases": [
             {
                 **case,
-                "label": re.sub(
-                    r"\b\w+\b",
-                    lambda word: worded.get(word.group(), word.group()),
-                    case["label"],
-                ),
+                "label": reworded(case["label"]),
             }
             for case in judge["cases"]
         ],
@@ -479,6 +493,17 @@ def posed(problem: dict, judge: dict, variant: dict) -> tuple[dict, dict]:
             language: renamed(code) for language, code in problem["starterCode"].items()
         },
         "constraints": [renamed(line) for line in problem["constraints"]],
+        # `optimal` and `pitfalls` were written against the published problem
+        # and were left unrenamed while everything around them moved. They are
+        # not reviewer-only notes: `build_instructions_for_plan` interpolates
+        # both into the live prompt, where the interviewer may say either
+        # aloud, and the post-interview debrief stamps them into the report the
+        # candidate reads. So they are renamed with the rest of the prose
+        # rather than filtered at each consumer afterwards. `summary` is not
+        # renamed: it reaches only `report_brief`, which is deliberately given
+        # the published problem alongside the scenario.
+        "optimal": reworded(problem["optimal"]),
+        "pitfalls": reworded(problem["pitfalls"]),
     }
     return problem, judge
 
@@ -587,7 +612,11 @@ def check_source_absent(
 ) -> None:
     """The source title and site appear nowhere the browser receives."""
     problem_id, title = problem["id"], problem["title"]
-    if "leetcode" in json.dumps(variant).lower():
+    # The reference notes join the variant under the site check, not only the
+    # title one: both are interpolated into the live prompt and stamped into
+    # the debrief, so the site can reach a candidate through either.
+    named_here = json.dumps([variant, shipped["optimal"], shipped["pitfalls"]])
+    if "leetcode" in named_here.lower():
         raise RuntimeError(f"{problem_id}: a variant never names the source site")
     for where, line in [("title", text["title"]), *spoken_prose(text, variant)]:
         if names_source(title, line):
@@ -610,6 +639,11 @@ def check_source_absent(
             raise RuntimeError(
                 f"{problem_id}: constraints[{at}] names the source title"
             )
+    # The reference notes, for the reason the rename above gives: both reach
+    # the candidate, one through the live prompt and one through the debrief.
+    for where in ("optimal", "pitfalls"):
+        if names_source(title, shipped[where]):
+            raise RuntimeError(f"{problem_id}: {where} names the source title")
 
 
 def check_entry_named(

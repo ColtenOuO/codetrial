@@ -3868,8 +3868,8 @@
       "c": "int minMutation(char* startGene, char* endGene, char** bank, int bankSize) {\n    \n}"
     },
     "summary": "Given start and end genes plus a bank of valid genes, return the minimum number of one-character mutations needed to reach the end gene.",
-    "optimal": "Treat bank genes as graph nodes connected when they differ by one character. BFS from startGene to endGene gives the shortest mutation count. Generate neighbors by trying A/C/G/T at each position or by scanning the small bank. O(B^2 * L) or O(B * L * 4) depending on neighbor generation.",
-    "pitfalls": "Returning a path when endGene is not in the bank; using DFS and missing the shortest path; allowing multi-character jumps; revisiting genes and cycling; counting genes instead of mutation edges."
+    "optimal": "Treat each gene listed in bank as a graph node, connecting two genes that differ by one character. BFS from startGene to endGene gives the shortest mutation count. Generate neighbors by trying A/C/G/T at each position or by scanning the small bank array. O(B^2 * L) or O(B * L * 4) depending on neighbor generation.",
+    "pitfalls": "Returning a path when endGene is missing from bank; using DFS and missing the shortest path; allowing multi-character jumps; revisiting genes and cycling; counting genes instead of mutation edges."
   },
   {
     "id": "word-ladder",
@@ -5907,8 +5907,8 @@
       "java": "class Solution {\n    public int findMaximizedCapital(int k, int w, int[] profits, int[] capital) {\n        // Think out loud as you go!\n        return 0;\n    }\n}\n"
     },
     "summary": "Choose up to k affordable projects to maximize final capital, where each chosen project's profit is added to available capital.",
-    "optimal": "Sort projects by required capital, push newly affordable profits into a max-heap as capital grows, and repeatedly take the largest available profit. O(n log n + k log n) time.",
-    "pitfalls": "Choosing projects by profit before they are affordable; using a min-heap for profits; forgetting that each completed project increases capital for later choices; continuing when no project is affordable."
+    "optimal": "Sort projects by capital[i], push the profits[i] of each newly affordable project into a max-heap as available cash grows, and repeatedly take the largest value in the heap. O(n log n + k log n) time.",
+    "pitfalls": "Choosing projects by profits[i] before they are affordable; using a min-heap for profits; forgetting that each completed project increases available cash for later choices; continuing when no project is affordable."
   },
   {
     "id": "find-k-pairs-with-smallest-sums",

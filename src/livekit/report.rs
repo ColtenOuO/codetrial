@@ -79,23 +79,25 @@ async fn report_packet(
 
 /// The teaching material that becomes useful only after an interview ends.
 ///
-/// `optimal` and `pitfalls` predate scenario naming and were written against
-/// published problems, so they are checked again at this boundary before they
-/// become candidate-visible. The authored scenario contract, hints, and
-/// follow-ups have their own bank validation, but the same filter keeps one
-/// future bank edit from leaking a source title through this server stamp.
+/// Every field here is bank-validated before it gets this far: the scenario
+/// contract, hints and follow-ups always were, and `optimal` and `pitfalls`
+/// joined them when `posed` started renaming them and `check_source_absent`
+/// started reading them. This filter is the backstop behind that, not the
+/// thing standing between a published name and a candidate, which is why it
+/// drops a field rather than refusing the report.
 fn stamp_report_debrief(
     report: &mut serde_json::Value,
     boot: &RuntimeBootstrap<'_>,
     state: &RuntimeState,
 ) {
     let problem = boot.problem;
+
+    // The empty title an original problem gives matches no title but still
+    // refuses a practice site, which is what `validate_report_candidate`
+    // already does. Skipping the check for those problems instead would leave
+    // the one kind of exercise this filter cannot speak for.
+    let source_title = problem.source_title().unwrap_or("");
     let safe = |field: &str, text: &str| {
-        // The empty title an original problem gives matches no title but still
-        // refuses a practice site, which is what `validate_report_candidate`
-        // already does. Skipping the check for those problems instead would
-        // leave the one kind of exercise this filter cannot speak for.
-        let source_title = problem.source_title().unwrap_or("");
         if crate::agent::names_published_problem(source_title, text) {
             eprintln!(
                 "codetrial report_debrief_dropped problem={} field={field}",
