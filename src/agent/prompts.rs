@@ -840,8 +840,7 @@ Score two independent dimensions from 0 to 100:
    optimization, and accurately answered follow-ups. Also consider completeness
    of Situation, Task, personal Action, and Result only if the interviewer actually
    asked a behavioral question. If none was asked, say behavioral communication
-   was not assessed and do not deduct for it. Consider independence too: each hint
-   should meaningfully reduce this score; {} hint(s) were given."#,
+   was not assessed and do not deduct for it."#,
         input.duration_min,
         input.elapsed_min,
         input.problem.title,
@@ -857,8 +856,7 @@ Score two independent dimensions from 0 to 100:
         input.hints_used,
         input.hint_rung,
         volunteered_hints,
-        test_summary,
-        input.hints_used
+        test_summary
     )
 }
 

@@ -740,6 +740,10 @@ fn prompt_golden_digest_matches_versions() {
             (3, 8),
             "1be28b91ea6148c278f262c01d61670563ff4752b37ad517675284e9304a5825",
         ),
+        (
+            (3, 9),
+            "4f9e1aac81d6479abbe454d3eeb8dad27f414c2b311bc6cf89165dad9566ce1f",
+        ),
     ]
     .into_iter()
     .find_map(|(candidate, digest)| (candidate == versions).then_some(digest));
@@ -5323,17 +5327,36 @@ fn generated_problem_metadata_exposes_no_private_rubric() {
 
 #[test]
 fn interview_contract_versions_are_one_closed_bundle() {
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 9);
+    // The doc is the register a maintainer reads before bumping anything, so a
+    // bump that leaves it behind is worse than no register at all. Read the
+    // active-bundle line back rather than trusting the two to be edited
+    // together, and require the table to carry a row for that bundle.
+    let doc = std::fs::read_to_string("docs/interview-contract-versions.md")
+        .expect("the contract register is readable");
+    assert!(
+        doc.contains(&format!(
+            "Bundle {INTERVIEW_CONTRACT_BUNDLE_VERSION}: live prompt {LIVE_PROMPT_VERSION}, \
+             report prompt {REPORT_PROMPT_VERSION}, rubric {RUBRIC_VERSION}, report schema \
+             {REPORT_SCHEMA_VERSION}."
+        )),
+        "docs/interview-contract-versions.md does not name the active bundle"
+    );
+    assert!(
+        doc.contains(&format!("\n| {INTERVIEW_CONTRACT_BUNDLE_VERSION} | ")),
+        "the bundle table has no row for {INTERVIEW_CONTRACT_BUNDLE_VERSION}"
+    );
+
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 10);
     assert_eq!(LIVE_PROMPT_VERSION, 3);
-    assert_eq!(REPORT_PROMPT_VERSION, 8);
+    assert_eq!(REPORT_PROMPT_VERSION, 9);
     assert_eq!(RUBRIC_VERSION, 1);
     assert_eq!(REPORT_SCHEMA_VERSION, 2);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 9,
+            "bundleVersion": 10,
             "livePromptVersion": 3,
-            "reportPromptVersion": 8,
+            "reportPromptVersion": 9,
             "rubricVersion": 1,
             "reportSchemaVersion": 2,
         })

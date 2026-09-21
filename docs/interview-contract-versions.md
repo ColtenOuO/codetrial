@@ -8,10 +8,11 @@ can select it.
 
 ## The active bundle
 
-Bundle 9: live prompt 3, report prompt 8, rubric 1, report schema 2.
+Bundle 10: live prompt 3, report prompt 9, rubric 1, report schema 2.
 
 | Bundle | Introduced |
 |---|---|
+| 10 | Hints remain qualitative context for candidate independence rather than automatic numeric communication-score deductions. |
 | 9 | Reports keep the fixed mid-level hiring bar and state the optional level the candidate practiced for beside it. |
 | 8 | Candidate-authored test cases reach the live interviewer and report brief, while judge pass totals remain separate. |
 | 7 | The post-interview server stamp adds optional debrief, topics, and practice level fields. `tests/golden/report-schema.json` remains the model output shape only; server-stamped fields are versioned at the browser sanitizer. |
