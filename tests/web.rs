@@ -1539,12 +1539,28 @@ fn static_problem_bank_and_judges_cover_each_problem() {
             );
         }
         if spec["kind"] == "class" {
-            assert!(
-                spec["className"]
-                    .as_str()
-                    .is_some_and(|name| !name.is_empty()),
-                "missing class name for {id}"
-            );
+            let class_name = spec["className"]
+                .as_str()
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| panic!("missing class name for {id}"));
+
+            // The harness instantiates this name and the candidate defines it,
+            // and the two come from different files: the judge is renamed from
+            // the bank while the starters are rewritten from the variant. A
+            // rename that reached one and not the other would compile to a
+            // missing symbol on the candidate's first run, which is the worst
+            // place to find out.
+            for (language, starter) in problem["starterCode"]
+                .as_object()
+                .unwrap_or_else(|| panic!("starterCode must be an object for {id}"))
+            {
+                assert!(
+                    starter
+                        .as_str()
+                        .is_some_and(|code| code.contains(class_name)),
+                    "{id}: the {language} starter does not define {class_name}"
+                );
+            }
         }
         if spec["kind"] == "function" {
             let param_names = spec["paramNames"]
