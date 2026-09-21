@@ -9,6 +9,7 @@
         "language": "python",
         "setupError": null,
         "failures": [],
+        "candidateCases": [],
         "at": 1770000000000
       }
     },
@@ -33,6 +34,7 @@
             "error": "TypeError: nums is not iterable"
           }
         ],
+        "candidateCases": [],
         "at": 1770000000000
       }
     },
@@ -69,6 +71,55 @@
             "error": null
           }
         ],
+        "candidateCases": [],
+        "at": 1770000000000
+      }
+    },
+    {
+      "name": "more candidate cases than the payload carries",
+      "payload": {
+        "passed": 1,
+        "total": 1,
+        "language": "python",
+        "setupError": null,
+        "failures": [],
+        "candidateCases": [
+          {
+            "label": "Your case 1",
+            "input": "[1]",
+            "expected": null,
+            "got": "[1]",
+            "error": null
+          },
+          {
+            "label": "Your case 2",
+            "input": "[2]",
+            "expected": null,
+            "got": "[2]",
+            "error": null
+          },
+          {
+            "label": "Your case 3",
+            "input": "[3]",
+            "expected": null,
+            "got": "[3]",
+            "error": null
+          },
+          {
+            "label": "Your case 4",
+            "input": "[4]",
+            "expected": null,
+            "got": "[4]",
+            "error": null
+          },
+          {
+            "label": "Your case 5",
+            "input": "[5]",
+            "expected": null,
+            "got": "[5]",
+            "error": null
+          }
+        ],
         "at": 1770000000000
       }
     },
@@ -80,6 +131,7 @@
         "language": "cpp",
         "setupError": "Compiler Explorer returned 503",
         "failures": [],
+        "candidateCases": [],
         "at": 1770000000000
       }
     }

@@ -28,19 +28,48 @@ const AVATAR_MODEL_ORIGIN: &str = "https://raw.githubusercontent.com";
 /// below is unreachable and exists only so a bad origin costs the LiveKit host
 /// rather than the policy.
 pub(crate) fn content_security_policy_header(config: &WebServerConfig) -> HeaderValue {
-    HeaderValue::from_str(&content_security_policy(config))
-        .unwrap_or_else(|_| HeaderValue::from_static("default-src 'self'"))
+    policy_header(&content_security_policy(config))
 }
 
-/// The honest ceiling first: `script-src` has to keep `'unsafe-eval'`, because
-/// the JavaScript runner evaluates candidate code inside a blob Worker and blob
-/// workers inherit this document's policy, and Pyodide compiles wasm. So this
-/// is not a policy that stops script injection outright.
+fn policy_header(policy: &str) -> HeaderValue {
+    HeaderValue::from_str(policy).unwrap_or_else(|_| HeaderValue::from_static("default-src 'self'"))
+}
+
+/// The one script served here that still evaluates strings, and the only
+/// response that is allowed to.
 ///
-/// It still buys the things that need no eval: no framing, no `<base>`
-/// rewriting, no plugins, no inline handlers (both pages carry zero), and a
-/// `connect-src` that names every origin the page is allowed to talk to
-/// instead of all of them.
+/// MediaPipe's vendored face-detection bundle is emscripten glue: it builds
+/// functions from text and there is no build of it that does not. It runs in a
+/// worker of its own, and a worker fetched over http(s) takes its policy from
+/// its own response rather than inheriting the document's, which is what makes
+/// this containable. So `eval` is granted to this one file instead of to the
+/// interview page, where the candidate's own text is rendered.
+///
+/// Nothing reaches this worker but the frames `integrity-worker.js` sends it,
+/// and it answers with a verdict; it evaluates its own bundle, never a caller's
+/// string. Injected script on the page can start it, and gets face detection.
+pub(crate) const EVAL_WORKER_PATH: &str = "/face-worker.js";
+
+pub(crate) fn eval_worker_policy_header(config: &WebServerConfig) -> HeaderValue {
+    policy_header(&policy_with_eval(config, true))
+}
+
+/// `script-src` withholds `'unsafe-eval'` and grants `'wasm-unsafe-eval'`
+/// instead, which is the narrower permission Pyodide actually needs: it allows
+/// WebAssembly compilation and still refuses `eval` and `new Function`. Both
+/// halves of that were measured in a browser rather than assumed, because a
+/// blob Worker inherits this document's policy, so anything the runner needed
+/// would have had to be granted to every script on the interview page.
+///
+/// The JavaScript runner used to need the wider permission: it evaluated the
+/// candidate's code from a string. It now builds its Worker with that code as
+/// the worker's own first statements, which runs the same code with the same
+/// reach and needs only `blob:`. See `runWorker` in `web/runners.js`.
+///
+/// So the page carries no eval, on top of what it already bought: no framing,
+/// no `<base>` rewriting, no plugins, no inline handlers (both pages carry
+/// zero), and a `connect-src` that names every origin the page is allowed to
+/// talk to instead of all of them.
 ///
 /// Pyodide used to add `https://cdn.jsdelivr.net` to both `script-src` and
 /// `connect-src`. It is served from `web/vendor/pyodide/` now.
@@ -51,11 +80,20 @@ pub(crate) fn content_security_policy_header(config: &WebServerConfig) -> Header
 /// configurable, and inventing a knob to narrow one CSP entry would be a
 /// deployment concept nobody asked for. Two things are true and worth being
 /// honest about. `connect-src` matches origins, not paths, so naming the
-/// model's host grants every public file on it; and `script-src` already keeps
-/// `'unsafe-eval'` for the reason above, so this policy was never the thing
-/// standing between injected script and the network. It buys the same thing it
+/// model's host grants every public file on it. It buys the same thing it
 /// bought before: a list a reviewer can read, rather than `*`.
 pub(crate) fn content_security_policy(config: &WebServerConfig) -> String {
+    policy_with_eval(config, false)
+}
+
+/// The one policy, with `script-src` built from its parts rather than the
+/// worker's copy patched from the page's: a patch keyed on the directive's
+/// exact text stops matching the day a source is added to it.
+fn policy_with_eval(config: &WebServerConfig, eval: bool) -> String {
+    let mut script = String::from("script-src 'self' blob: 'wasm-unsafe-eval'");
+    if eval {
+        script.push_str(" 'unsafe-eval'");
+    }
     let mut connect = vec!["'self'".to_string(), AVATAR_MODEL_ORIGIN.to_string()];
     if config.compiler_explorer_enabled {
         connect.push(COMPILER_EXPLORER_ORIGIN.to_string());
@@ -117,7 +155,7 @@ pub(crate) fn content_security_policy(config: &WebServerConfig) -> String {
         "img-src 'self' data: blob:".to_string(),
         "media-src 'self' blob:".to_string(),
         "worker-src 'self' blob:".to_string(),
-        "script-src 'self' blob: 'unsafe-eval'".to_string(),
+        script,
         // `blob:` is here for the avatar, and it is not optional. A .vrm is a
         // GLB, so its textures are always bufferView-backed, and GLTFLoader
         // mints a `blob:` URL per image and hands it to ImageBitmapLoader,
@@ -263,6 +301,7 @@ const STRICT_TRANSPORT: &str = "max-age=31536000";
 #[derive(Clone)]
 pub(crate) struct SecurityHeaders {
     policy: HeaderValue,
+    eval_worker_policy: HeaderValue,
     strict_transport: Option<HeaderValue>,
 }
 
@@ -277,6 +316,7 @@ pub(crate) struct SecurityHeaders {
 pub(crate) fn security_header_state(config: &WebServerConfig) -> SecurityHeaders {
     SecurityHeaders {
         policy: content_security_policy_header(config),
+        eval_worker_policy: eval_worker_policy_header(config),
         strict_transport: config
             .production
             .then(|| HeaderValue::from_static(STRICT_TRANSPORT)),
@@ -288,6 +328,7 @@ pub(crate) async fn security_headers(
     request: Request<Body>,
     next: Next,
 ) -> Response {
+    let eval_worker = request.uri().path() == EVAL_WORKER_PATH;
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert(
@@ -304,8 +345,8 @@ pub(crate) async fn security_headers(
     // naming the first two would restate the default and buy nothing: a
     // same-origin frame inherits them either way, and a cross-origin one gets
     // them under neither. Nothing here asks for a location, so nothing this
-    // page ever embeds should be able to, and `script-src` keeping
-    // `'unsafe-eval'` is the reason that is worth stating rather than assuming.
+    // page ever embeds should be able to, which is worth stating rather than
+    // assuming.
     headers.insert(
         "permissions-policy",
         HeaderValue::from_static("geolocation=()"),
@@ -313,7 +354,14 @@ pub(crate) async fn security_headers(
     if let Some(strict_transport) = headers_for.strict_transport {
         headers.insert(header::STRICT_TRANSPORT_SECURITY, strict_transport);
     }
-    headers.insert(header::CONTENT_SECURITY_POLICY, headers_for.policy);
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        if eval_worker {
+            headers_for.eval_worker_policy
+        } else {
+            headers_for.policy
+        },
+    );
     response
 }
 

@@ -51,7 +51,152 @@ const compilerExplorer = {
 const pyodideBaseUrl = () => new URL("/vendor/pyodide/", globalThis.location?.href ?? "http://localhost/").href;
 let pythonWorkerPromise = null;
 
-export async function runBrowserTests(problemId, code, language, onStatus = null) {
+export function parseCandidateCase(spec, input) {
+  let args;
+  try {
+    args = JSON.parse(input);
+  } catch {
+    throw new Error("Input must be a JSON argument array.");
+  }
+  if (!Array.isArray(args)) throw new Error("Input must be a JSON argument array.");
+  if (spec.kind === "class") return parseClassCandidateCase(spec, args);
+  const types = spec.paramTypes || [];
+  const names = spec.paramNames || [];
+  if (args.length !== types.length) throw new Error(`Expected ${types.length} arguments, received ${args.length}.`);
+  for (const [index, type] of types.entries()) {
+    // `argTypes` is the node shape the judge builds, `paramTypes` the language
+    // signature. Name whichever one was checked: "must match Node" tells a
+    // candidate nothing when the requirement is a random-pointer list.
+    const required = spec.argTypes?.[index] ?? type;
+    if (!candidateTypeMatches(args[index], required)) {
+      const name = names[index] ? ` (${names[index]})` : "";
+      throw new Error(`Parameter ${index + 1}${name} must match ${required}.`);
+    }
+  }
+  // A node reference is checked against the argument the runner will resolve it
+  // against, not against a fixed position: the cycle goes to whichever argument
+  // is the linked list, and a tree value to `nodeRefRootParam`. A reference the
+  // runner cannot resolve is a different failure in each of the five languages,
+  // from a thrown TypeError to a null node, so it is refused once here rather
+  // than five ways later. No list to point into means the worker applies no
+  // cycle either, so that case is skipped rather than refused.
+  const cycle = spec.cyclePosParam;
+  const list = args[spec.argTypes?.indexOf("linkedList")];
+  if (Number.isInteger(cycle) && Array.isArray(list)) {
+    if (args[cycle] < -1 || args[cycle] >= list.length) {
+      throw new Error(`Parameter ${cycle + 1} must name a list position or -1.`);
+    }
+  }
+  const tree = reachableTreeValues(args[spec.nodeRefRootParam ?? 0]);
+  for (const [index, type] of (spec.argTypes || []).entries()) {
+    if (type === "treeNodeValue" && !tree.includes(args[index])) {
+      throw new Error(`Parameter ${index + 1} must name a value in the tree.`);
+    }
+  }
+  return args;
+}
+
+/// The values a level-order array actually builds a node for, which is not the
+/// same as the values it contains: the worker only queues non-null nodes, so
+/// `[1, null, null, 5]` builds one node and never reaches the 5. Membership in
+/// the array would accept that reference and the runner would then fail to
+/// resolve it, differently in each language.
+function reachableTreeValues(values) {
+  if (!Array.isArray(values) || values[0] === null || values[0] === undefined) return [];
+  const reachable = [values[0]];
+  let index = 1;
+  for (let parent = 0; parent < reachable.length; parent++) {
+    for (let side = 0; side < 2; side++, index++) {
+      if (index < values.length && values[index] !== null) reachable.push(values[index]);
+    }
+  }
+  return reachable;
+}
+
+function candidateTypeMatches(value, type) {
+  // Refuse rather than admit: a judge whose type is not a name is a judge this
+  // cannot speak for, and `type.endsWith` below would throw on it anyway.
+  if (typeof type !== "string") return false;
+  if (type === "array" || type === "Node") return Array.isArray(value);
+  if (type === "null") return value === null;
+  if (type === "object") return value !== null && typeof value === "object" && !Array.isArray(value);
+  if (type.endsWith("[]")) return Array.isArray(value) && value.every((item) => candidateTypeMatches(item, type.slice(0, -2)));
+  const list = /^list<(.*)>$/.exec(type);
+  if (list) return Array.isArray(value) && value.every((item) => candidateTypeMatches(item, list[1]));
+  if (type === "integer") return Number.isInteger(value);
+  if (type === "double" || type === "number") return Number.isFinite(value);
+  if (type === "string") return typeof value === "string";
+  if (type === "boolean") return typeof value === "boolean";
+  if (type === "character") return typeof value === "string" && [...value].length === 1;
+  if (["linkedList", "ListNode"].includes(type)) return Array.isArray(value) && value.every(Number.isInteger);
+  if (["binaryTree", "nextTree", "TreeNode"].includes(type)) {
+    return Array.isArray(value) && value.every((item) => item === null || Number.isInteger(item));
+  }
+  if (type === "linkedListArray") return Array.isArray(value) && value.every((item) => candidateTypeMatches(item, "linkedList"));
+  if (type === "randomList") {
+    return Array.isArray(value) && value.every((item) => Array.isArray(item) && item.length === 2
+      && Number.isInteger(item[0]) && (item[1] === null
+        || (Number.isInteger(item[1]) && item[1] >= 0 && item[1] < value.length)));
+  }
+  if (type === "graphNode") return Array.isArray(value)
+    && value.every((item) => Array.isArray(item)
+      && item.every((neighbor) => Number.isInteger(neighbor) && neighbor >= 1 && neighbor <= value.length));
+  if (["cyclePos", "treeNodeValue"].includes(type)) return Number.isInteger(value);
+  return false;
+}
+
+function inferredCandidateType(value) {
+  if (Array.isArray(value)) {
+    const itemTypes = new Set(value.map(inferredCandidateType));
+    return itemTypes.size === 1 ? `${itemTypes.values().next().value}[]` : "array";
+  }
+  if (value === null) return "null";
+  if (Number.isInteger(value)) return "integer";
+  if (typeof value === "number") return "double";
+  return typeof value;
+}
+
+function parseClassCandidateCase(spec, input) {
+  if (input.length !== 2 || !Array.isArray(input[0]) || !Array.isArray(input[1]) || input[0].length !== input[1].length) {
+    throw new Error("A class case needs matching operation and argument arrays.");
+  }
+  if (!input[0].every((operation) => typeof operation === "string") || !input[1].every(Array.isArray)) {
+    throw new Error("Class operations must be strings with JSON argument arrays.");
+  }
+  if (input[0][0] !== spec.className) throw new Error(`The first operation must be ${spec.className}.`);
+  const signatures = new Map();
+  for (const testCase of spec.cases) {
+    const [operations, argumentsList] = testCase.input || [];
+    if (!Array.isArray(operations) || !Array.isArray(argumentsList)) continue;
+    for (const [index, operation] of operations.entries()) {
+      const args = argumentsList[index];
+      if (!Array.isArray(args)) continue;
+      const allowed = signatures.get(operation) || [];
+      allowed.push(operation === spec.className && spec.constructorArgTypes
+        ? spec.constructorArgTypes
+        : args.map(inferredCandidateType));
+      signatures.set(operation, allowed);
+    }
+  }
+  for (const [index, operation] of input[0].entries()) {
+    if (index > 0 && operation === spec.className) {
+      throw new Error(`Only the first operation may be ${spec.className}.`);
+    }
+    const allowed = signatures.get(operation);
+    if (!allowed) throw new Error("Class case names an operation this exercise does not provide.");
+    const args = input[1][index];
+    const sameArity = allowed.filter((types) => types.length === args.length);
+    if (!sameArity.length) {
+      throw new Error(`Operation ${operation} does not accept ${args.length} arguments.`);
+    }
+    if (!sameArity.some((types) => types.every((type, argument) => candidateTypeMatches(args[argument], type)))) {
+      throw new Error(`Arguments for operation ${operation} do not match its parameter types.`);
+    }
+  }
+  return input;
+}
+
+export async function runBrowserTests(problemId, code, language, onStatus = null, candidateCases = []) {
   const empty = { problemId, language, passed: 0, total: 0, cases: [], at: Date.now() };
   // A judge that cannot be fetched is not a problem without tests. Reporting
   // both the same way told a candidate on a flaky connection that their problem
@@ -63,6 +208,8 @@ export async function runBrowserTests(problemId, code, language, onStatus = null
     return { ...empty, setupError: "The test cases could not be loaded. Check your connection and run again." };
   }
   if (!spec) return { ...empty, setupError: "No test cases are defined for this problem." };
+  const candidates = candidateCases.map((testCase, index) => ({ ...testCase, label: testCase.label || `Your case ${index + 1}` }));
+  const runnable = { ...spec, cases: [...spec.cases, ...candidates] };
   const base = { ...empty, total: spec.cases.length };
   if (pendingTestLanguages.has(language)) {
     return { ...base, setupError: `${languageLabel(language)} tests are not wired up yet. Keep using the editor; Jim can still review this code.` };
@@ -70,20 +217,31 @@ export async function runBrowserTests(problemId, code, language, onStatus = null
   const reportStatus = (status) => onStatus?.(status);
   try {
     const raw = language === "python"
-      ? await runPython(code, spec, reportStatus)
+      ? await runPython(code, runnable, reportStatus)
       : compilerExplorer[language]
-        ? await runCompilerExplorer(language, code, spec, reportStatus)
-        : (reportStatus("running"), await runWorker(code, spec));
+        ? await runCompilerExplorer(language, code, runnable, reportStatus)
+        : (reportStatus("running"), await runWorker(code, runnable));
     if (raw.setupError || !raw.results) return { ...base, setupError: raw.setupError || "The run produced no results." };
-    const cases = spec.cases.map((testCase, index) => {
+    const cases = runnable.cases.map((testCase, index) => {
+      const candidate = index >= spec.cases.length;
+      const observed = candidate && !Object.hasOwn(testCase, "expected");
       const result = raw.results[index];
       if (!result || result.error) {
-        return { label: testCase.label, pass: false, got: "-", expected: renderValue(testCase.expected), error: result?.error || "No result produced.", timeMs: Math.round(result?.timeMs || 0) };
+        return { label: testCase.label, pass: false, got: "-", expected: observed ? undefined : renderValue(testCase.expected), ...(candidate ? { input: renderValue(testCase.input) } : {}), error: result?.error || "No result produced.", timeMs: Math.round(result?.timeMs || 0), candidate };
       }
-      const pass = checkAnswer(spec, testCase, result.actual);
-      return { label: testCase.label, pass, got: renderValue(result.actual), expected: renderValue(testCase.expected), timeMs: Math.round(result.timeMs) };
+      let pass = null;
+      let error = null;
+      if (!observed) {
+        try {
+          pass = checkAnswer(spec, testCase, result.actual);
+        } catch (caught) {
+          pass = false;
+          error = String(caught.message || caught);
+        }
+      }
+      return { label: testCase.label, pass, got: renderValue(result.actual), expected: observed ? undefined : renderValue(testCase.expected), ...(candidate ? { input: renderValue(testCase.input) } : {}), ...(error ? { error } : {}), timeMs: Math.round(result.timeMs), candidate };
     });
-    return { ...base, cases, passed: cases.filter((item) => item.pass).length };
+    return { ...base, cases, passed: cases.filter((item) => !item.candidate && item.pass === true).length };
   } catch (error) {
     return { ...base, setupError: String(error.message || error).slice(0, 400) };
   }
@@ -140,7 +298,9 @@ async function runCompilerExplorer(language, code, spec, reportStatus = null) {
 // 23-line function read as a 278-line one.
 const JS_RUNNER_SOURCE = `
     self.onmessage = (event) => {
-      const { code, spec } = event.data;
+      // \`name\` is the one \`runWorker\` checked and bound in the prelude, sent
+      // rather than re-derived so the message names what was looked up.
+      const { spec, name } = event.data;
       const sanitize = (value) => {
         const normalized = value === undefined ? null : value;
         try { return JSON.parse(JSON.stringify(normalized)); } catch { return String(normalized); }
@@ -345,14 +505,9 @@ const JS_RUNNER_SOURCE = `
         });
         return converted;
       };
-      const name = spec.kind === "class" ? spec.className : spec.entry;
-      let entry;
-      try {
-        entry = (0, eval)(code + "\\n;(typeof " + name + " !== 'undefined' ? " + name + " : undefined);");
-      } catch (error) {
-        self.postMessage({ setupError: String((error && error.message) || error).slice(0, 400) });
-        return;
-      }
+      // Resolved by the prelude this worker was built with, not by evaluating
+      // the candidate's code here. See runWorker below.
+      const entry = self.__codetrialEntry;
       if (typeof entry !== "function") {
         self.postMessage({ setupError: "Could not find " + name + " in your code - keep the starter signature." });
         return;
@@ -394,9 +549,34 @@ const JS_RUNNER_SOURCE = `
     };
   `;
 
+/// The candidate's JavaScript, run as the first statements of the worker
+/// rather than evaluated from a string inside it.
+///
+/// Both forms run the same code with the same reach. The difference is what
+/// the page has to be allowed to do: evaluating a string needs
+/// `script-src 'unsafe-eval'`, and a blob worker inherits the document's
+/// policy, so that permission could not be confined to the worker. It applied
+/// to every script on the interview page, which is the one place a candidate's
+/// own text is already being rendered. A worker built from the code needs only
+/// `blob:`, so the page keeps no eval at all.
+///
+/// The parts go into `Blob` as separate strings, so nothing has to be escaped:
+/// code holding a backtick or `${` is data here, not source being spliced. The
+/// entry name is the one thing interpolated, and it comes from the judge rather
+/// than the candidate; it is checked against an identifier anyway, because a
+/// name reaching this line is a name being written into a program.
 function runWorker(code, spec) {
   return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(new Blob([JS_RUNNER_SOURCE], { type: "application/javascript" }));
+    const name = spec.kind === "class" ? spec.className : spec.entry;
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name ?? "")) {
+      reject(new Error("This exercise does not name a function the runner can call."));
+      return;
+    }
+    const prelude = [
+      code,
+      "\n;self.__codetrialEntry = (typeof ", name, " !== 'undefined' ? ", name, " : undefined);\n",
+    ];
+    const url = URL.createObjectURL(new Blob([...prelude, JS_RUNNER_SOURCE], { type: "application/javascript" }));
     const worker = new Worker(url);
     const timer = setTimeout(() => {
       worker.terminate();
@@ -415,7 +595,7 @@ function runWorker(code, spec) {
       URL.revokeObjectURL(url);
       reject(new Error(event.message || "Worker crashed while running your code."));
     };
-    worker.postMessage({ code, spec });
+    worker.postMessage({ spec, name });
   });
 }
 

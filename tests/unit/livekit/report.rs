@@ -182,6 +182,7 @@ fn report_helpers_use_report_topic_prompt_state_and_error_note() {
             &error,
             "google",
         )),
+        boot.problem,
     );
     let packet = report_data_packet(report).unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&packet.payload).unwrap();
@@ -381,6 +382,141 @@ fn the_server_overwrites_model_selected_contract_provenance() {
     let mut incomplete = serde_json::json!({"incomplete": true});
     stamp_report_contract(&mut incomplete);
     assert_eq!(incomplete["interviewContract"], interview_contract_json());
+}
+
+#[test]
+fn report_carries_the_debrief() {
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google"),
+    ])
+    .unwrap();
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let phases = [
+        "Repeat",
+        "Example",
+        "Algorithm",
+        "Coding",
+        "Test",
+        "Optimizations",
+        "Situation",
+        "Task",
+        "Action",
+        "Result",
+    ];
+    let valid = serde_json::json!({
+        "codingScore": 82,
+        "communicationScore": 74,
+        "decision": "HIRE",
+        "summary": "You produced a grounded solution and explained the main trade-offs.",
+        "codingFeedback": {"strengths": ["Correct core", "Clear implementation"], "improvements": ["Explain complexity", "Test boundaries"]},
+        "communicationFeedback": {"strengths": ["Clear narration", "Direct answers"], "improvements": ["Name your own action", "State the result"]},
+        "improvementPlan": [
+            {"phase": "Algorithm", "weakness": "Explain complexity", "impact": "medium", "frequency": 1, "drill": "Practice the missing step", "durationMin": 5, "successCriterion": "State it without prompting", "selfReview": ["Grounded in evidence"]},
+            {"phase": "Test", "weakness": "Test boundaries", "impact": "medium", "frequency": 1, "drill": "Practice the missing step", "durationMin": 5, "successCriterion": "State it without prompting", "selfReview": ["Grounded in evidence"]},
+            {"phase": "Action", "weakness": "Name your own action", "impact": "medium", "frequency": 1, "drill": "Practice the missing step", "durationMin": 5, "successCriterion": "State it without prompting", "selfReview": ["Grounded in evidence"]},
+            {"phase": "Result", "weakness": "State the result", "impact": "medium", "frequency": 1, "drill": "Practice the missing step", "durationMin": 5, "successCriterion": "State it without prompting", "selfReview": ["Grounded in evidence"]}
+        ],
+        "frameworkAssessment": {"rubricVersion": 1, "phases": phases.iter().map(|phase| serde_json::json!({"phase": phase, "score": 75, "weaknessTags": []})).collect::<Vec<_>>()}
+    });
+    let state = RuntimeState {
+        hint_rungs_given: 1,
+        ..RuntimeState::default()
+    };
+
+    let mut generated = final_report(Some(&valid), 0, None, boot.problem);
+    stamp_report_debrief(&mut generated, &boot, &state);
+    let mut fallback = final_report(None, 0, Some("model unavailable"), boot.problem);
+    stamp_report_debrief(&mut fallback, &boot, &state);
+
+    for report in [&generated, &fallback] {
+        assert!(report["debrief"]["scenarioContract"].is_string());
+        assert!(report["debrief"]["approach"].is_string());
+        assert!(report["debrief"]["pitfalls"].is_string());
+        assert_eq!(report["debrief"]["hints"].as_array().unwrap().len(), 3);
+        assert_eq!(report["debrief"]["hints"][0]["given"], true);
+        assert_eq!(report["debrief"]["hints"][1]["given"], false);
+        assert_eq!(report["topics"], serde_json::json!(["Array", "Hash Table"]));
+        assert!(report["practiceLevel"].is_null());
+    }
+    assert!(generated.get("incomplete").is_none());
+    assert_eq!(fallback["incomplete"], true);
+}
+
+/// An original exercise has no published title, so the filter checks its
+/// teaching material against an empty one. That must refuse a practice site
+/// and nothing else: a rule that matched everything would blank the debrief
+/// for these problems, and the happy path above would never notice because
+/// `two-sum` is imported.
+#[test]
+fn an_original_problem_keeps_its_debrief() {
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google"),
+    ])
+    .unwrap();
+    let boot = bootstrap(
+        &config,
+        "interview-original",
+        Some("fixed-capacity-ring-buffer"),
+        45,
+    );
+    assert!(boot.problem.source_title().is_none());
+
+    let mut report = final_report(None, 0, Some("model unavailable"), boot.problem);
+    stamp_report_debrief(&mut report, &boot, &RuntimeState::default());
+
+    assert!(report["debrief"]["scenarioContract"].is_string());
+    assert!(report["debrief"]["approach"].is_string());
+    assert!(report["debrief"]["pitfalls"].is_string());
+    assert_eq!(
+        report["debrief"]["hints"].as_array().unwrap().len(),
+        boot.problem.variant().hints.len()
+    );
+    assert_eq!(
+        report["debrief"]["followUps"].as_array().unwrap().len(),
+        boot.problem.variant().follow_ups.len()
+    );
+}
+
+/// The filter exists for a bank edit that has not happened yet, so the only
+/// way to watch it work is to make that edit here. An original problem is the
+/// case with no published title to compare against, and checking it against
+/// none at all is what keeps the practice site refused.
+#[test]
+fn an_original_problem_debrief_still_refuses_a_practice_site() {
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "google"),
+    ])
+    .unwrap();
+    let mut boot = bootstrap(
+        &config,
+        "interview-original",
+        Some("fixed-capacity-ring-buffer"),
+        45,
+    );
+    assert!(boot.problem.source_title().is_none());
+
+    let mut tampered = *boot.problem;
+    tampered.optimal = "You will have seen this one on LeetCode.";
+    boot.problem = Box::leak(Box::new(tampered));
+
+    let mut report = final_report(None, 0, Some("model unavailable"), boot.problem);
+    stamp_report_debrief(&mut report, &boot, &RuntimeState::default());
+
+    assert!(
+        report["debrief"]["approach"].is_null(),
+        "a practice site survived the debrief filter: {}",
+        report["debrief"]["approach"]
+    );
+    assert!(report["debrief"]["pitfalls"].is_string());
 }
 
 /// The liveness pair bookends the evidence, and the closing sample is the

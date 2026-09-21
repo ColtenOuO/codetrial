@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +16,52 @@ SPEC.loader.exec_module(GEN)
 
 
 class ProblemMetadataGeneratorTests(unittest.TestCase):
+    def test_invalid_origin_types_are_reported(self):
+        self.assertEqual(GEN.invalid_origins([{"id": "bad", "origin": []}]), ["bad"])
+
+    def test_an_original_problem_outside_the_plan_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "problems.json"
+            path.write_text(
+                json.dumps(
+                    [{"id": "imported"}, {"id": "original", "origin": "original"}]
+                )
+            )
+            GEN.check_plan_slugs(["imported"], path)
+
+    def test_an_unmarked_problem_outside_the_plan_is_refused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "problems.json"
+            path.write_text(json.dumps([{"id": "imported"}, {"id": "extra"}]))
+            with self.assertRaisesRegex(RuntimeError, "plan drops"):
+                GEN.check_plan_slugs(["imported"], path)
+
+    def test_an_original_problem_has_no_published_fields(self):
+        original = {
+            "id": "ring-buffer",
+            "origin": "original",
+            "difficulty": "Medium",
+            "topics": ["Design"],
+            "summary": "Store bounded values.",
+            "optimal": "Use a circular array.",
+            "pitfalls": "Do not overwrite the wrong end.",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "problems.json"
+            path.write_text(json.dumps([original]))
+            self.assertEqual(GEN.validated_problems(path), [original])
+            path.write_text(json.dumps([{**original, "title": "Ring Buffer"}]))
+            with self.assertRaisesRegex(RuntimeError, "no published title"):
+                GEN.validated_problems(path)
+
+    def test_an_original_problem_omits_candidate_source(self):
+        entry = {
+            "problem": {"origin": "original", "difficulty": "Easy", "starterCode": {}},
+            "variant": {"title": "Ring Desk", "brief": []},
+            "examples": [],
+        }
+        self.assertNotIn("source", GEN.candidate_problem(entry))
+
     def test_rejects_duplicate_ids_and_invalid_topic_lists(self):
         valid = {"id": "one", "difficulty": "Easy", "topics": ["Array"]}
         for problems in (
@@ -58,8 +105,11 @@ class VariantValidationTests(unittest.TestCase):
         "difficulty": "Medium",
         "topics": ["Dynamic Programming"],
         "statement": ["Given coins and an amount, return the fewest coins."],
+        "summary": "Return the fewest coins summing to amount, or -1.",
         "examples": [{"input": "coins = [1,2,5], amount = 11", "output": "3"}],
         "constraints": ["0 <= amount <= 10^4"],
+        "optimal": "Bottom-up dynamic programming over coins and amount.",
+        "pitfalls": "Forgetting that coins may overshoot the amount.",
         "starterCode": {
             "python": "class Solution:\n    def coinChange(self, coins, amount):\n        pass\n",
             "javascript": "function coinChange(coins, amount) {\n}\n",
@@ -115,6 +165,123 @@ class VariantValidationTests(unittest.TestCase):
             posed["examples"], [{"input": "tokens = [5,7], amount = 1", "output": "-1"}]
         )
 
+    def test_a_judge_needs_five_cases_and_a_boundary_case(self):
+        with self.assertRaisesRegex(RuntimeError, "at least five cases"):
+            GEN.check_judge_case_coverage("coin-change", self.judge)
+
+        cases = [
+            {
+                "label": f"case {number}",
+                "input": [[number, number + 1], number],
+                # The amount is the smaller coin, so one coin pays it. These
+                # fixtures only feed the case-count and boundary checks, but a
+                # wrong answer here reads as the rule for whoever copies them.
+                "expected": 1,
+            }
+            for number in range(1, 5)
+        ]
+        accepted = {
+            **self.judge,
+            "paramTypes": ["integer[]", "integer"],
+            "cases": [
+                *cases,
+                {"label": "zero amount", "input": [[1], 0], "expected": 0},
+            ],
+        }
+        GEN.check_judge_case_coverage("coin-change", accepted)
+
+        zero_in_numeric_array = {
+            **accepted,
+            "cases": cases
+            + [
+                {
+                    "label": "zero denomination",
+                    "input": [[0, 5], 3],
+                    "expected": -1,
+                }
+            ],
+        }
+        GEN.check_judge_case_coverage("coin-change", zero_in_numeric_array)
+
+        one_in_positive_scalar = {
+            **accepted,
+            "cases": cases
+            + [
+                {
+                    "label": "one amount",
+                    "input": [[2, 3], 1],
+                    "expected": -1,
+                }
+            ],
+        }
+        GEN.check_judge_case_coverage("coin-change", one_in_positive_scalar)
+
+        non_boundary_cases = [
+            {
+                "label": f"larger case {number}",
+                "input": [[number, number + 1], number + 1],
+                "expected": 1,
+            }
+            for number in range(2, 6)
+        ]
+        without_boundary = {
+            **accepted,
+            "cases": non_boundary_cases
+            + [{"label": "another", "input": [[2, 3], 2], "expected": 1}],
+        }
+        with self.assertRaisesRegex(RuntimeError, "boundary case"):
+            GEN.check_judge_case_coverage("coin-change", without_boundary)
+
+    def test_c_starter_returning_through_return_size_needs_the_malloc_note(self):
+        starter = {
+            "starterCode": {
+                "c": "int* fewestTokens(int* values, int* returnSize) { return 0; }"
+            },
+        }
+        with self.assertRaisesRegex(RuntimeError, "coin-change"):
+            GEN.check_c_return_size_ownership("coin-change", starter)
+        starter["starterCode"]["c"] = (
+            'const char* note = "malloced; caller calls free";\n'
+            "int* fewestTokens(int* values, int* returnSize) { return 0; }"
+        )
+        with self.assertRaisesRegex(RuntimeError, "coin-change"):
+            GEN.check_c_return_size_ownership("coin-change", starter)
+        starter["starterCode"]["c"] = (
+            "/* Returned array must be malloced; caller calls free(). */\n"
+            "int* fewestTokens(int* values, int* returnSize) { return 0; }"
+        )
+        GEN.check_c_return_size_ownership("coin-change", starter)
+
+    def test_case_gap_list_rejects_new_and_stale_exceptions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            gaps = Path(temporary) / "judge-case-gaps.txt"
+            gaps.write_text("# GAPS: 0\n")
+            with patch.dict(
+                GEN.check_judge_case_gaps.__globals__, {"JUDGE_CASE_GAPS_SOURCE": gaps}
+            ):
+                with self.assertRaisesRegex(RuntimeError, "at least five cases"):
+                    GEN.check_judge_case_gaps({"coin-change": self.judge})
+
+            gaps.write_text("# GAPS: 1\ncoin-change\n")
+            accepted = {
+                **self.judge,
+                "paramTypes": ["integer[]", "integer"],
+                "cases": [
+                    {
+                        "label": f"case {number}",
+                        "input": [[number, number + 1], number],
+                        "expected": number,
+                    }
+                    for number in range(1, 5)
+                ]
+                + [{"label": "zero amount", "input": [[1], 0], "expected": 0}],
+            }
+            with patch.dict(
+                GEN.check_judge_case_gaps.__globals__, {"JUDGE_CASE_GAPS_SOURCE": gaps}
+            ):
+                with self.assertRaisesRegex(RuntimeError, "now passes"):
+                    GEN.check_judge_case_gaps({"coin-change": accepted})
+
     def test_the_source_title_and_site_stay_out_of_what_the_candidate_reads(self):
         self.rejects("names the source title", title="Coin Change Kiosk")
         self.rejects(
@@ -142,6 +309,43 @@ class VariantValidationTests(unittest.TestCase):
             "contract names the source title", contract="Coin change, renamed."
         )
 
+    def test_the_reference_notes_are_posed_like_the_rest_of_the_prose(self):
+        """`optimal` and `pitfalls` reach the candidate, so they are renamed.
+
+        Both are interpolated into the live prompt, where the interviewer may
+        read either aloud, and stamped into the debrief the candidate keeps.
+        They were the last candidate-visible prose still written in published
+        names, and the server filtered them at the boundary instead.
+        """
+        posed = GEN.validated_variant(self.problem, self.judge, self.variant)
+        self.assertIn("tokens", posed["problem"]["optimal"])
+        self.assertNotIn("coins", posed["problem"]["optimal"])
+        self.assertNotIn("coins", posed["problem"]["pitfalls"])
+        # The entry point stays, because in a sentence it is a verb rather than
+        # a name: substituting it turns "take one jump" into "take one
+        # fewestFlights". `check_labels` declines it in labels for the same
+        # reason. `summary` stays published: only `report_brief` reads it, and
+        # that prompt is handed the published problem deliberately.
+        self.assertNotIn("fewestTokens", posed["problem"]["optimal"])
+        self.assertEqual(posed["problem"]["summary"], self.problem["summary"])
+
+    def test_the_reference_notes_may_not_name_the_source(self):
+        for field in ("optimal", "pitfalls"):
+            with self.assertRaisesRegex(
+                RuntimeError, f"{field} names the source title"
+            ):
+                GEN.validated_variant(
+                    {**self.problem, field: "Coin Change, the classic exercise."},
+                    self.judge,
+                    self.variant,
+                )
+            with self.assertRaisesRegex(RuntimeError, "source site"):
+                GEN.validated_variant(
+                    {**self.problem, field: "As posed on LeetCode."},
+                    self.judge,
+                    self.variant,
+                )
+
     def test_a_function_problem_takes_a_new_entry_point(self):
         self.rejects("not a new name", entry="coinChange")
         self.rejects("not a new name", entry="COIN_change")
@@ -158,6 +362,8 @@ class VariantValidationTests(unittest.TestCase):
             **self.problem,
             "id": "lru-cache",
             "title": "LRU Cache",
+            "optimal": "Scan once and keep a running total.",
+            "pitfalls": "Forgetting the empty input.",
             "starterCode": {
                 "python": "class LRUCache:\n    def get(self, key): pass\n",
                 "c": "LRUCache* lRUCacheCreate(int capacity) {}\nint lRUCacheGet(LRUCache* obj, int key) {}\n",
@@ -226,6 +432,7 @@ class VariantValidationTests(unittest.TestCase):
 
     def test_the_title_counts_however_it_is_spaced_but_not_as_a_near_miss(self):
         self.assertTrue(GEN.names_source("LRU Cache", "Implement LRUCache now."))
+        self.assertTrue(GEN.names_source("LRUCache", "Implement LRUCache now."))
         self.assertTrue(GEN.names_source("Min Stack", "MinStack* minStackCreate() {"))
         self.assertTrue(GEN.names_source("3Sum", "This is basically 3 Sum."))
         self.assertFalse(GEN.names_source("3Sum", "Those 3 sums cancel."))
@@ -235,12 +442,37 @@ class VariantValidationTests(unittest.TestCase):
         # A parameter named like a title word does not excuse naming the title.
         self.assertTrue(GEN.names_source("Merge Intervals", "Classic merge intervals."))
 
+    def test_the_generator_answers_the_way_the_server_does(self):
+        # The same table is asserted against `names_published_problem` in
+        # `the_server_answers_the_way_the_generator_does`. The accented rows
+        # are the ones that caught a real split: `str.isalnum` is true for an
+        # accented letter, and lowercasing a dotted capital I yields an ASCII
+        # letter the server never sees.
+        for title, text, expected in [
+            ("İ", "i", False),
+            ("İstanbul", "istanbul", False),
+            ("Café", "we modelled it as a café", True),
+            ("LRUCache", "this is the classic LRU cache", True),
+            ("Triangle", "walk the triangle row by row", False),
+            ("3Sum", "Those 3 sums cancel.", False),
+            ("3Sum", "This is basically 3 Sum.", True),
+            ("MinStack", "a min stack keeps its minimum beside each push", True),
+            ("LRU Cache", "Implement LRUCache now.", True),
+            # Pins `ascii_only` inside `spelled_words`: without it the
+            # generator splits this as lrui, cache and the server as lru,
+            # cache, so the generator ships a variant the server refuses.
+            ("LRU Cache", "the LRU\u0130Cache field", True),
+        ]:
+            self.assertEqual(GEN.names_source(title, text), expected, (title, text))
+
     def test_published_sample_text_is_refused_wherever_the_browser_gets_it(self):
         sentence = {"label": "sentence", "input": [[1], 2], "expected": "coin change"}
         judge = {**self.judge, "cases": [*self.judge["cases"], sentence]}
         self.rejects("judge case 'sentence' names the source title", judge=judge)
         problem = {
             **self.problem,
+            "optimal": "Scan once and keep a running total.",
+            "pitfalls": "Forgetting the empty input.",
             "starterCode": {"python": "# Coin Change\ndef fewestTokens(): pass\n"},
         }
         with self.assertRaisesRegex(
@@ -491,15 +723,21 @@ class RuleStepTests(unittest.TestCase):
     def test_validated_variants_needs_every_problem_once_in_bank_order(self):
         problems = [self.problem]
         judges = {"coin-change": self.judge}
-        validated = GEN.validated_variants(
-            problems, judges, {"coin-change": self.variant}
-        )
-        self.assertEqual(list(validated), ["coin-change"])
-        self.assertIs(validated["coin-change"]["variant"], self.variant)
-        with self.assertRaisesRegex(RuntimeError, "every problem once, in bank order"):
-            GEN.validated_variants(problems, judges, {})
-        with self.assertRaisesRegex(RuntimeError, "keyed by problem id"):
-            GEN.validated_variants(problems, judges, [self.variant])
+        with patch.dict(
+            GEN.validated_variants.__globals__,
+            {"check_judge_case_gaps": lambda unused: None},
+        ):
+            validated = GEN.validated_variants(
+                problems, judges, {"coin-change": self.variant}
+            )
+            self.assertEqual(list(validated), ["coin-change"])
+            self.assertIs(validated["coin-change"]["variant"], self.variant)
+            with self.assertRaisesRegex(
+                RuntimeError, "every problem once, in bank order"
+            ):
+                GEN.validated_variants(problems, judges, {})
+            with self.assertRaisesRegex(RuntimeError, "keyed by problem id"):
+                GEN.validated_variants(problems, judges, [self.variant])
 
     def test_rust_variants_writes_every_field_the_server_reads(self):
         entry = GEN.validated_variant(self.problem, self.judge, self.variant)
@@ -631,6 +869,7 @@ class PageNameTests(unittest.TestCase):
             # The bank by path: the gate runs these cases on a thread pool.
             GEN.camel_words(problem["title"])
             for problem in GEN.read_json(ROOT / "problem-bank" / "problems.json")
+            if GEN.is_imported(problem)
         }
         checkers = {
             judge["checker"] for judge in GEN.read_json(GEN.JUDGE_SOURCE).values()

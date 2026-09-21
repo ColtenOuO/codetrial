@@ -268,3 +268,33 @@ test("a VideoFrame is not a frame this detector can read", async (t) => {
     await page.close();
   }
 });
+
+/// The setup check's detector, on the page the Rust server serves and under
+/// the policy it sends. MediaPipe builds functions from text and the page
+/// withholds `'unsafe-eval'`, so loaded into the page it fails to initialize,
+/// and the check reads "unavailable" as ready: no face is ever required.
+/// Detection has to go through `face-worker.js`, the one response granted eval.
+test("the setup face check detects a face under the page's own policy", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage();
+  try {
+    await page.goto(BASE, { waitUntil: "domcontentloaded" });
+    const samples = await page.evaluate(async (drawSource) => {
+      const draw = eval(`(${drawSource})`);
+      const { createFacePresenceDetector } = await import("/face-presence.js");
+      const detector = await createFacePresenceDetector();
+      try {
+        return { face: await detector.detect(draw(true)), empty: await detector.detect(draw(false)) };
+      } finally {
+        // An unavailable detector has nothing to close.
+        detector.close?.();
+      }
+    }, DRAW_FACE);
+    assert.deepEqual(
+      [samples.face.available, samples.face.count, samples.empty.available, samples.empty.count],
+      [true, 1, true, 0],
+    );
+  } finally {
+    await page.close();
+  }
+});

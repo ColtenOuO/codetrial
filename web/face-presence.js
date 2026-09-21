@@ -1,6 +1,7 @@
 export const FACE_ANOMALY_THRESHOLD_MS = 2000;
 export const FACE_SEVERE_THRESHOLD_MS = 15000;
 export const FACE_VENDOR_BASE = "/vendor/face-detection/";
+const FACE_WORKER_URL = "/face-worker.js";
 // A gap longer than this between two face samples means nothing was watched in
 // between: a suspended laptop, a throttled background tab, a detector that
 // stalled. The tracker is reset rather than charged for the interval.
@@ -145,6 +146,15 @@ export async function createFacePresenceDetector({
         close() {},
       };
     }
+    // On a page, MediaPipe runs in `face-worker.js` rather than here. Its
+    // emscripten glue builds functions from text, and the document's policy
+    // withholds `'unsafe-eval'`: loaded into the page, the bundle throws during
+    // initialization and the preflight quietly loses its face check. The worker
+    // is the one response the server grants eval to.
+    if (!Detector && scope.document && typeof scope.Worker === "function"
+      && typeof scope.createImageBitmap === "function") {
+      return createWorkerFaceDetector(scope);
+    }
     await loadScript(scope, baseUrl);
     const FaceDetection = Detector || scope.FaceDetection;
     if (typeof FaceDetection !== "function") return { available: false, reason: "detector_unavailable" };
@@ -169,6 +179,65 @@ export async function createFacePresenceDetector({
   } catch {
     return { available: false, reason: "detector_load_failed" };
   }
+}
+
+/// The detector behind `face-worker.js`, speaking the protocol
+/// `integrity-worker.js` already uses: an `ImageBitmap` transferred in, a
+/// count and confidence back, matched by id. A worker that fails to start
+/// answers every outstanding and later request as unavailable rather than
+/// leaving them unsettled.
+function createWorkerFaceDetector(scope) {
+  const worker = new scope.Worker(FACE_WORKER_URL);
+  const pending = new Map();
+  let nextId = 0;
+  let failed = false;
+  const settleAll = () => {
+    failed = true;
+    const waiting = [...pending.values()];
+    pending.clear();
+    for (const done of waiting) done(FACE_SAMPLE_UNAVAILABLE);
+  };
+  worker.onmessage = (event) => {
+    const result = event.data || {};
+    const done = pending.get(result.id);
+    if (!done) return;
+    pending.delete(result.id);
+    done(result.type === "result"
+      ? { available: true, count: result.count, confidence: result.confidence }
+      : FACE_SAMPLE_UNAVAILABLE);
+  };
+  worker.onerror = settleAll;
+  return {
+    available: true,
+    async detect(image) {
+      if (failed) return FACE_SAMPLE_UNAVAILABLE;
+      let frame;
+      try {
+        frame = await scope.createImageBitmap(image);
+      } catch {
+        return FACE_SAMPLE_UNAVAILABLE;
+      }
+      if (failed) {
+        frame.close?.();
+        return FACE_SAMPLE_UNAVAILABLE;
+      }
+      return new Promise((resolve) => {
+        const id = ++nextId;
+        pending.set(id, resolve);
+        try {
+          worker.postMessage({ type: "detect", id, frame }, [frame]);
+        } catch {
+          pending.delete(id);
+          frame.close?.();
+          resolve(FACE_SAMPLE_UNAVAILABLE);
+        }
+      });
+    },
+    close() {
+      settleAll();
+      worker.terminate();
+    },
+  };
 }
 
 async function defaultLoadScript(scope, baseUrl) {

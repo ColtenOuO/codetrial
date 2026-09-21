@@ -117,6 +117,30 @@ function testResultsCases() {
         }),
       },
       {
+        // Six candidate cases against a cap of five, for the reason the
+        // failures above give: an empty `candidateCases` in the fixture let
+        // `CANDIDATE_CASE_LIMIT` move without `--check` seeing it, and the
+        // Rust copy of the same number is pinned separately in tests/agent/runtime.rs.
+        name: "more candidate cases than the payload carries",
+        payload: lib.testPayload({
+          passed: 1,
+          total: 1,
+          language: "python",
+          setupError: null,
+          cases: [
+            { label: "example 1", pass: true, expected: "[0,1]", got: "[0,1]", timeMs: 1 },
+            ...Array.from({ length: lib.CANDIDATE_CASE_LIMIT + 1 }, (_, offset) => offset + 1).map((index) => ({
+              label: `Your case ${index}`,
+              candidate: true,
+              input: `[${index}]`,
+              pass: null,
+              got: `[${index}]`,
+              timeMs: index,
+            })),
+          ],
+        }),
+      },
+      {
         name: "setup error",
         payload: lib.testPayload({
           passed: 0,
@@ -149,6 +173,10 @@ const INTEGRITY_INPUTS = [
   {
     type: "CAMERA_RELEASED_TO_PRESENTER", source: "media", severity: "info",
     at: "2026-08-18T06:37:41.330Z", detail: "analyzer=camera_released",
+  },
+  {
+    type: "CAMERA_NOT_USED", source: "camera", severity: "info",
+    at: "2026-08-18T06:37:42.330Z", detail: "declined",
   },
   {
     type: "INTEGRITY_HEARTBEAT", source: "media", severity: "info", at: "2026-08-18T06:38:26.901Z",

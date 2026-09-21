@@ -60,10 +60,75 @@ test("each successful review lengthens the next interval", () => {
   assert.equal(choice.review.intervalDays, 3);
 });
 
-test("a difficulty nobody selected is never recommended", () => {
+test("a difficulty nobody selected is never recommended as a new problem", () => {
   // `first` would return "passed" if the Easy entries were still in the pool.
   const choice = pickProblem(bank, new Set(["Hard"]), [], first);
   assert.equal(choice.picked.id, "hard");
+});
+
+test("a due review at a level the lobby moved past is still recommended", () => {
+  const now = 10 * day;
+  const choice = pickProblem(bank, new Set(["Medium"]), [completed("passed", now - day)], first, now);
+  assert.equal(choice.picked.id, "passed");
+  assert.equal(choice.review.intervalDays, 1);
+});
+
+test("a failed review resets the interval", () => {
+  const now = 10 * day;
+  const choice = pickProblem(
+    bank,
+    new Set(["Easy"]),
+    [
+      { problemId: "passed", at: now - day, report: { decision: "NO_HIRE" } },
+      completed("passed", now - 2 * day),
+    ],
+    first,
+    now,
+  );
+  assert.equal(choice.picked.id, "passed");
+  assert.equal(choice.review.intervalDays, 1);
+});
+
+test("an older failed review does not erase newer successes", () => {
+  const now = 10 * day;
+  const choice = pickProblem(
+    bank,
+    new Set(["Easy"]),
+    [
+      completed("passed", now - 3 * day),
+      completed("passed", now - 4 * day),
+      { problemId: "passed", at: now - 5 * day, report: { decision: "NO_HIRE" } },
+    ],
+    first,
+    now,
+  );
+  assert.equal(choice.picked.id, "passed");
+  assert.equal(choice.review.intervalDays, 3);
+});
+
+// A failure at either end of the history proves nothing about the reset: the
+// newest one sets the interval by being newest, and the oldest one resets a
+// streak that had not started. Only a failure with successes on both sides
+// tells "the streak restarts here" apart from "count every pass ever".
+test("a failure resets the streak the successes after it rebuild", () => {
+  const now = 10 * day;
+  const choice = pickProblem(
+    bank,
+    new Set(["Easy"]),
+    [
+      completed("passed", now - day),
+      { problemId: "passed", at: now - 2 * day, report: { decision: "NO_HIRE" } },
+      completed("passed", now - 3 * day),
+    ],
+    first,
+    now,
+  );
+  assert.equal(choice.picked.id, "passed");
+  assert.equal(
+    choice.review.intervalDays,
+    1,
+    "one success since the failure, not two across it",
+  );
 });
 
 test("selecting several difficulties draws from all of them", () => {
@@ -297,5 +362,6 @@ test("the interview reads the focus from session storage, never from its address
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../../web/interview.js", import.meta.url), "utf8");
   assert.doesNotMatch(source, /params\.get\("focus"\)/);
-  assert.match(source, /practiceFocus: consumeSharedFocus\(sessionStorage\)/);
+  assert.match(source, /practiceFocus: consumeSharedFocus\(tabStorage\)/);
+  assert.match(source, /const tabStorage = storageArea\("sessionStorage"\);/);
 });

@@ -125,7 +125,7 @@
       "difficulty": "Hard",
       "id": "candy",
       "optimal": "Two passes: left-to-right enforces increases from the left, right-to-left enforces increases from the right, summing the max requirement per child. O(n) time and O(n) space; slope counting can reduce space.",
-      "pitfalls": "Treating equal ratings as needing more candy; only scanning one direction; missing valleys that need both sides; failing a single child or long descending tail.",
+      "pitfalls": "Treating equal scores as needing more candy; only scanning one direction; missing valleys that need both sides; failing a single child or long descending tail.",
       "summary": "Given child ratings in a line, assign the fewest candies so every child has at least one and higher-rated neighbors get more.",
       "title": "Candy"
     },
@@ -148,7 +148,7 @@
     {
       "difficulty": "Medium",
       "id": "coin-change",
-      "optimal": "Use bottom-up dynamic programming where dp[a] is the fewest coins needed for amount a. For each amount and coin, relax dp[a] from dp[a - coin] + 1. O(amount * coins) time, O(amount) space.",
+      "optimal": "Use bottom-up dynamic programming where dp[a] is the fewest tokens needed for amount a. For each amount and coin, relax dp[a] from dp[a - coin] + 1. O(amount * tokens) time, O(amount) space.",
       "pitfalls": "Using greedy choice on denominations where it fails; returning a large sentinel instead of -1; mishandling amount 0; treating each coin as usable only once.",
       "summary": "Return the fewest coins needed to make an amount from given denominations, or -1 if impossible.",
       "title": "Coin Change"
@@ -236,7 +236,7 @@
     {
       "difficulty": "Medium",
       "id": "course-schedule",
-      "optimal": "Model prerequisites as a directed graph and detect whether it has a cycle. Kahn's algorithm with indegrees or DFS coloring both run in O(V+E) time and O(V+E) space.",
+      "optimal": "Model requirements as a directed graph and detect whether it has a cycle. Kahn's algorithm with indegrees or DFS coloring both run in O(V+E) time and O(V+E) space.",
       "pitfalls": "Reversing edge direction and misreading [course, prerequisite]; failing disconnected components; not decrementing indegrees correctly; treating a repeated visit in DFS as a cycle instead of only the active recursion stack.",
       "summary": "Given course count and prerequisite pairs, decide whether every course can be completed.",
       "title": "Course Schedule"
@@ -316,7 +316,7 @@
     {
       "difficulty": "Medium",
       "id": "find-minimum-in-rotated-sorted-array",
-      "optimal": "Binary search against the rightmost value: when nums[mid] > nums[right], the minimum is to the right; otherwise it is at mid or to the left. O(log n) time, O(1) space.",
+      "optimal": "Binary search against the rightmost value: when levels[mid] > levels[right], the minimum is to the right; otherwise it is at mid or to the left. O(log n) time, O(1) space.",
       "pitfalls": "Using linear search; failing the not-rotated case; losing the candidate minimum by moving the right boundary past mid; assuming duplicates exist and adding unnecessary duplicate handling.",
       "summary": "Find the smallest value in a unique sorted array that may have been rotated.",
       "title": "Find Minimum in Rotated Sorted Array"
@@ -333,9 +333,17 @@
       "difficulty": "Easy",
       "id": "find-the-index-of-the-first-occurrence-in-a-string",
       "optimal": "For interview purposes, a clear scan checking each possible start is acceptable at O(n*m) for these constraints; KMP or another linear string-matching algorithm is the deeper optimization if asked.",
-      "pitfalls": "Returning the last match instead of the first; stopping before checking the final possible start; mishandling overlapping partial matches; treating a failed partial match as proof the needle never appears later.",
+      "pitfalls": "Returning the last match instead of the first; stopping before checking the final possible start; mishandling overlapping partial matches; treating a failed partial match as proof the signature never appears later.",
       "summary": "Given haystack and needle strings, return the first index where needle appears in haystack, or -1 if it does not appear.",
       "title": "Find the Index of the First Occurrence in a String"
+    },
+    {
+      "difficulty": "Medium",
+      "id": "fixed-capacity-ring-buffer",
+      "optimal": "Use a fixed array with head, tail, and count. Write at tail and advance modulo capacity, read at head and advance modulo capacity, and use count to distinguish empty from full. Each method is O(1).",
+      "pitfalls": "Using head equals tail alone to represent both empty and full; shifting an array on every pop; advancing an index without wrapping it; changing the front value on a failed push; forgetting that a successful pop frees one slot.",
+      "summary": "Design a fixed-capacity FIFO buffer that accepts and removes values in constant time without shifting stored elements.",
+      "title": "Bounded Event Queue"
     },
     {
       "difficulty": "Medium",
@@ -356,7 +364,7 @@
     {
       "difficulty": "Medium",
       "id": "gas-station",
-      "optimal": "If total gas is less than total cost, no solution exists. Otherwise scan once with a running tank; whenever it drops below zero, the next station becomes the only possible new start. O(n) time, O(1) space.",
+      "optimal": "If total pickup is less than total drain, no solution exists. Otherwise scan once with a running tank; whenever it drops below zero, the next station becomes the only possible new start. O(n) time, O(1) space.",
       "pitfalls": "Trying every start for O(n^2); forgetting the total feasibility check; returning the first locally positive station; mishandling wraparound or a single exact station.",
       "summary": "Given gas and travel costs around a circular route, return a starting station that can complete the circuit, or -1 if none exists.",
       "title": "Gas Station"
@@ -380,7 +388,7 @@
     {
       "difficulty": "Medium",
       "id": "h-index",
-      "optimal": "Sort citations descending and find the last position where citations[i] >= i+1, or use buckets capped at n for O(n). Sorting is O(n log n) time and O(1) to O(n) space depending on language.",
+      "optimal": "Sort dependents descending and find the last position where dependents[i] >= i+1, or use buckets capped at n for O(n). Sorting is O(n log n) time and O(1) to O(n) space depending on language.",
       "pitfalls": "Confusing h with the maximum citation count; forgetting h cannot exceed the number of papers; mishandling all-zero inputs; using > instead of >= at the threshold.",
       "summary": "Given citation counts for a researcher's papers, return the largest h such that at least h papers have h or more citations.",
       "title": "H-Index"
@@ -452,8 +460,8 @@
     {
       "difficulty": "Hard",
       "id": "ipo",
-      "optimal": "Sort projects by required capital, push newly affordable profits into a max-heap as capital grows, and repeatedly take the largest available profit. O(n log n + k log n) time.",
-      "pitfalls": "Choosing projects by profit before they are affordable; using a min-heap for profits; forgetting that each completed project increases capital for later choices; continuing when no project is affordable.",
+      "optimal": "Sort projects by required[i], push the payouts[i] of each newly affordable project into a max-heap as available cash grows, and repeatedly take the largest value in the heap. O(n log n + k log n) time.",
+      "pitfalls": "Choosing projects by payouts[i] before they are affordable; using a min-heap for payouts; forgetting that each completed project increases available cash for later choices; continuing when no project is affordable.",
       "summary": "Choose up to k affordable projects to maximize final capital, where each chosen project's profit is added to available capital.",
       "title": "IPO"
     },
@@ -692,8 +700,8 @@
     {
       "difficulty": "Medium",
       "id": "minimum-genetic-mutation",
-      "optimal": "Treat bank genes as graph nodes connected when they differ by one character. BFS from startGene to endGene gives the shortest mutation count. Generate neighbors by trying A/C/G/T at each position or by scanning the small bank. O(B^2 * L) or O(B * L * 4) depending on neighbor generation.",
-      "pitfalls": "Returning a path when endGene is not in the bank; using DFS and missing the shortest path; allowing multi-character jumps; revisiting genes and cycling; counting genes instead of mutation edges.",
+      "optimal": "Treat each gene listed in approved as a graph node, connecting two genes that differ by one character. BFS from current to target gives the shortest mutation count. Generate neighbors by trying A/C/G/T at each position or by scanning the small approved array. O(B^2 * L) or O(B * L * 4) depending on neighbor generation.",
+      "pitfalls": "Returning a path when target is missing from approved; using DFS and missing the shortest path; allowing multi-character jumps; revisiting genes and cycling; counting genes instead of mutation edges.",
       "summary": "Given start and end genes plus a bank of valid genes, return the minimum number of one-character mutations needed to reach the end gene.",
       "title": "Minimum Genetic Mutation"
     },
@@ -1069,7 +1077,7 @@
       "difficulty": "Hard",
       "id": "text-justification",
       "optimal": "Greedily pack as many words as fit per line. For non-final lines, divide spaces across gaps with earlier gaps receiving extras; for final or single-word lines, left-justify and pad the right. O(total output size) time.",
-      "pitfalls": "Forgetting every line must be exactly maxWidth characters; giving extra spaces to the rightmost gaps; fully justifying the final line; dividing by zero on a single-word line; accidentally trimming required trailing spaces.",
+      "pitfalls": "Forgetting every line must be exactly lineWidth characters; giving extra spaces to the rightmost gaps; fully justifying the final line; dividing by zero on a single-word line; accidentally trimming required trailing spaces.",
       "summary": "Given words and a maximum width, pack words into lines and distribute spaces so each line has exactly that width.",
       "title": "Text Justification"
     },
@@ -1165,7 +1173,7 @@
       "difficulty": "Hard",
       "id": "word-ladder",
       "optimal": "Run BFS over words, changing one position at a time and checking membership in an unvisited word set, or precompute wildcard buckets. Count levels as number of words in the sequence. O(N * L * alphabet) with direct generation, plus set lookups.",
-      "pitfalls": "Returning edge count instead of word count; forgetting that endWord must be in the list; revisiting words; accepting changes of more than one character; using DFS for shortest path.",
+      "pitfalls": "Returning edge count instead of word count; forgetting that desiredName must be in the list; revisiting words; accepting changes of more than one character; using DFS for shortest path.",
       "summary": "Given a begin word, an end word, and a word list, return the word count in the shortest one-letter-at-a-time transformation sequence.",
       "title": "Word Ladder"
     },
@@ -1196,8 +1204,8 @@
     {
       "difficulty": "Medium",
       "id": "zigzag-conversion",
-      "optimal": "Append each character to its current row while walking the row index down and up between the bounds. O(n) time and O(n) space for row buffers. Return the original string immediately when numRows is 1 or at least the string length.",
-      "pitfalls": "Dividing by a zero-length cycle when numRows is 1; mishandling the turn at the top or bottom row; allocating a full grid unnecessarily; losing character order within each row.",
+      "optimal": "Append each character to its current row while walking the row index down and up between the bounds. O(n) time and O(n) space for row buffers. Return the original string immediately when rowCount is 1 or at least the string length.",
+      "pitfalls": "Dividing by a zero-length cycle when rowCount is 1; mishandling the turn at the top or bottom row; allocating a full grid unnecessarily; losing character order within each row.",
       "summary": "Given a string and row count, place characters along a down-and-up zigzag path and read the rows in order.",
       "title": "Zigzag Conversion"
     }

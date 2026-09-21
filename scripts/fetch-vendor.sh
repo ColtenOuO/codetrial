@@ -14,8 +14,11 @@ VENDOR="$ROOT/web/vendor"
 
 [ -d "$VENDOR" ] || exit 0
 
-# Releases no longer embed or serve this model; browser Cache API owns it now.
-# Remove the ignored file left by pre-migration checkouts on their next build.
+# The avatar model used to be pinned here and fetched like everything else; it
+# is loaded from its own origin into the browser cache now. A checkout from
+# before that still has the file, nothing pins it any more, and
+# `verify-vendor.sh` refuses an unpinned file in this tree, so the first build
+# after upgrading fails on a leftover this script is the one placed to clear.
 rm -f "$VENDOR/avatar/jim.vrm"
 
 download()

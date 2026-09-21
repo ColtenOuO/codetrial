@@ -8,8 +8,10 @@ import re
 
 from .bank import (
     GUIDE_SOURCE,
+    ROOT,
     VARIANT_KEYS,
     compact,
+    is_imported,
     named,
     read_json,
     repeated,
@@ -43,14 +45,33 @@ def input_values(text: str) -> tuple:
     return tuple(values)
 
 
+def ascii_only(text: str) -> str:
+    """Non-ASCII-alphanumeric characters as spaces, the way the server reads them.
+
+    Tested before lowercasing, not after: `"İ".lower()` is an ASCII `i` and a
+    combining mark, so filtering the lowercased text keeps a letter the server
+    never sees. `is_ascii_alphanumeric` in src/agent/report.rs runs on the
+    original character and treats everything else as a word boundary.
+    """
+    return "".join(
+        character if character.isascii() and character.isalnum() else " "
+        for character in text
+    )
+
+
 def camel_words(text: str) -> str:
     """Letters and digits only, lowercased: `coinChange` and "Coin Change" agree."""
-    return "".join(character for character in text.lower() if character.isalnum())
+    return ascii_only(text).replace(" ", "").lower()
 
 
 def spelled_words(text: str) -> list[str]:
     """Lowercase words, with identifiers split where their case changes, so
-    `minStackCreate` reads as min, stack, create and `LRUCache` as lru, cache."""
+    `minStackCreate` reads as min, stack, create and `LRUCache` as lru, cache.
+
+    `ascii_only` first, so a non-ASCII letter separates words here exactly as
+    it does on the server rather than lowercasing into one.
+    """
+    text = ascii_only(text)
     text = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", text)
     text = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
     return re.findall(r"[a-z0-9]+", text.lower())
@@ -69,7 +90,12 @@ def names_source(title: str, text: str) -> bool:
     brief that says "merge intervals" names the problem whatever the parameter
     is called.
     """
-    return not title.isalpha() and spells(title, text)
+    # `isascii` as well as `isalpha`, because the server spells this exemption
+    # with `is_ascii_alphabetic`. Without it an accented single-word title
+    # would be exempt here and refused there, which is the generator and the
+    # server disagreeing about the same rule.
+    exempt = len(spelled_words(title)) == 1 and title.isascii() and title.isalpha()
+    return not exempt and spells(title, text)
 
 
 def spells(name: str, text: str) -> bool:
@@ -232,6 +258,139 @@ def check_labels(problem_id: str, judge: dict) -> None:
             raise RuntimeError(f"{problem_id}: case label {label!r} gives it away")
 
 
+def boundary_value(value: object, type_name: str) -> bool:
+    """Whether a value is small at the domain its declared type admits.
+
+    An empty list or zero element is a boundary for a numeric array; zero and
+    one cover inclusive and positive numeric lower bounds. The types are the
+    judge contract, so this predicate reads them instead of treating one JSON
+    shape as a boundary everywhere.
+    """
+    if type_name == "character[][]":
+        return isinstance(value, list) and (
+            len(value) <= 2
+            or all(
+                isinstance(row, list) and all(cell == "." for cell in row)
+                for row in value
+            )
+        )
+    if type_name.endswith("[][]"):
+        return isinstance(value, list) and (
+            len(value) <= 2
+            or any(isinstance(row, list) and len(row) <= 2 for row in value)
+        )
+    if type_name in {"integer[]", "number[]", "double[]"}:
+        return isinstance(value, list) and (len(value) <= 1 or 0 in value)
+    if type_name.endswith("[]") or type_name.startswith("list<"):
+        return isinstance(value, list) and len(value) <= 1
+    if type_name in {"integer", "number", "double"}:
+        return value in {0, 1}
+    if type_name in {"string", "character"}:
+        return isinstance(value, str) and len(value) <= 1
+    if type_name.lower() in {
+        "linkedlist",
+        "tree",
+        "binarytree",
+        "listnode",
+        "treenode",
+        "node",
+    }:
+        return value is None or (isinstance(value, list) and len(value) <= 2)
+    return False
+
+
+def has_boundary_case(judge: dict) -> bool:
+    """Whether one case reaches a boundary valid for this judge's domain."""
+    if judge["kind"] == "class":
+        constructor_types = judge.get("constructorArgTypes", [])
+        for case in judge["cases"]:
+            operations, arguments = case["input"]
+            if not operations or not arguments:
+                continue
+            constructor = arguments[0]
+            if any(
+                boundary_value(value, type_name)
+                for value, type_name in zip(constructor, constructor_types)
+            ):
+                return True
+            # Zero-argument constructors have no value to inspect. Their first
+            # method call still needs an actual small or empty value, rather
+            # than treating a constructor-plus-one-method sequence as proof.
+            if not constructor_types and any(
+                class_boundary_value(value) for args in arguments for value in args
+            ):
+                return True
+        return False
+    return any(
+        any(
+            boundary_value(value, type_name)
+            for value, type_name in zip(case["input"], judge["paramTypes"])
+        )
+        for case in judge["cases"]
+    )
+
+
+def class_boundary_value(value: object) -> bool:
+    """Whether an untyped class-operation argument carries a boundary value."""
+    if (
+        value is None
+        or value == 0
+        or value == 1
+        or (isinstance(value, str) and len(value) <= 1)
+    ):
+        return True
+    return isinstance(value, list) and (
+        not value or any(class_boundary_value(item) for item in value)
+    )
+
+
+def check_judge_case_coverage(problem_id: str, judge: dict) -> None:
+    """Every judge needs five cases and one domain-valid boundary case."""
+    if len(judge["cases"]) < 5:
+        raise RuntimeError(f"{problem_id}: judge needs at least five cases")
+    if not has_boundary_case(judge):
+        raise RuntimeError(f"{problem_id}: judge needs a boundary case")
+
+
+JUDGE_CASE_GAPS_SOURCE = ROOT / "problem-bank" / "judge-case-gaps.txt"
+
+
+def judge_case_gaps() -> set[str]:
+    """The temporary, counted list of judges still awaiting authored cases."""
+    lines = JUDGE_CASE_GAPS_SOURCE.read_text().splitlines()
+    header = next((line for line in lines if line.startswith("# GAPS: ")), None)
+    declared = header.removeprefix("# GAPS: ") if header else ""
+    if not declared.isdigit():
+        raise RuntimeError("judge-case-gaps.txt starts with '# GAPS: N'")
+    gaps = {line for line in lines if line and not line.startswith("#")}
+    if len(gaps) != int(declared):
+        raise RuntimeError(
+            f"judge-case-gaps.txt declares {declared} gaps and lists {len(gaps)}"
+        )
+    return gaps
+
+
+def check_judge_case_gaps(judges: dict) -> None:
+    """Every exception is still needed, and every missing case is listed."""
+    gaps = judge_case_gaps()
+    unknown = gaps - set(judges)
+    if unknown:
+        raise RuntimeError(
+            f"judge-case-gaps.txt names unknown judges: {sorted(unknown)}"
+        )
+    for problem_id, judge in judges.items():
+        try:
+            check_judge_case_coverage(problem_id, judge)
+        except RuntimeError:
+            if problem_id not in gaps:
+                raise
+        else:
+            if problem_id in gaps:
+                raise RuntimeError(
+                    f"{problem_id}: judge now passes; remove it from judge-case-gaps.txt"
+                )
+
+
 def posed(problem: dict, judge: dict, variant: dict) -> tuple[dict, dict]:
     """The bank entry and judge with the variant's names in place of the published ones.
 
@@ -263,16 +422,30 @@ def posed(problem: dict, judge: dict, variant: dict) -> tuple[dict, dict]:
             text = re.sub(rf"\b{re.escape(old)}(?=[A-Z])", new, text)
         return text
 
+    def reworded(text: str) -> str:
+        """Prose, so only the names that are nouns in it are substituted.
+
+        An entry point is usually an English verb: `jump`, `trap`, `rotate`,
+        `merge`, `search`, `rob`. Running the full rename over a sentence turns
+        "take one jump" into "take one fewestFlights", which is not a leak
+        fixed but a sentence broken. Parameters and terms are the names that
+        actually identify the published exercise in prose, and they read as
+        nouns where they appear. `check_labels` declines the entry point in
+        case labels for the same reason.
+
+        One pass, so a rename cannot feed the next one: a new name that is
+        also a published one stays put.
+        """
+        return re.sub(
+            r"\b\w+\b", lambda word: worded.get(word.group(), word.group()), text
+        )
+
     judge = {
         **judge,
         "cases": [
             {
                 **case,
-                "label": re.sub(
-                    r"\b\w+\b",
-                    lambda word: worded.get(word.group(), word.group()),
-                    case["label"],
-                ),
+                "label": reworded(case["label"]),
             }
             for case in judge["cases"]
         ],
@@ -298,6 +471,20 @@ def posed(problem: dict, judge: dict, variant: dict) -> tuple[dict, dict]:
             }
             for case in judge["cases"]
         ]
+        # Class methods do not carry a return type in the source bank. The
+        # harness must still know which calls are void when a candidate adds a
+        # case without an expected result, so publish that stable property once
+        # in the judge rather than infer it from the candidate's case.
+        returns = {}
+        for case in judge["cases"]:
+            for operation, expected in zip(case["input"][0], case["expected"]):
+                if operation != judge["className"]:
+                    returns[operation] = (
+                        "value"
+                        if expected is not None
+                        else returns.get(operation, "void")
+                    )
+        judge["methodReturnTypes"] = returns
     if "paramNames" in judge:
         judge["paramNames"] = [renames.get(name, name) for name in judge["paramNames"]]
     problem = {
@@ -306,6 +493,17 @@ def posed(problem: dict, judge: dict, variant: dict) -> tuple[dict, dict]:
             language: renamed(code) for language, code in problem["starterCode"].items()
         },
         "constraints": [renamed(line) for line in problem["constraints"]],
+        # `optimal` and `pitfalls` were written against the published problem
+        # and were left unrenamed while everything around them moved. They are
+        # not reviewer-only notes: `build_instructions_for_plan` interpolates
+        # both into the live prompt, where the interviewer may say either
+        # aloud, and the post-interview debrief stamps them into the report the
+        # candidate reads. So they are renamed with the rest of the prose
+        # rather than filtered at each consumer afterwards. `summary` is not
+        # renamed: it reaches only `report_brief`, which is deliberately given
+        # the published problem alongside the scenario.
+        "optimal": reworded(problem["optimal"]),
+        "pitfalls": reworded(problem["pitfalls"]),
     }
     return problem, judge
 
@@ -355,7 +553,7 @@ def check_new_names(problem: dict, judge: dict, variant: dict) -> None:
     # held to the same list of names it may not bring back.
     published_names = {
         camel_words(name)
-        for name in (problem["title"], judge.get("entry"), judge.get("className"))
+        for name in (problem.get("title"), judge.get("entry"), judge.get("className"))
         if name
     }
     pattern = r"[a-z][A-Za-z0-9]+" if declared == "entry" else r"[A-Z][A-Za-z0-9]+"
@@ -414,7 +612,11 @@ def check_source_absent(
 ) -> None:
     """The source title and site appear nowhere the browser receives."""
     problem_id, title = problem["id"], problem["title"]
-    if "leetcode" in json.dumps(variant).lower():
+    # The reference notes join the variant under the site check, not only the
+    # title one: both are interpolated into the live prompt and stamped into
+    # the debrief, so the site can reach a candidate through either.
+    named_here = json.dumps([variant, shipped["optimal"], shipped["pitfalls"]])
+    if "leetcode" in named_here.lower():
         raise RuntimeError(f"{problem_id}: a variant never names the source site")
     for where, line in [("title", text["title"]), *spoken_prose(text, variant)]:
         if names_source(title, line):
@@ -437,6 +639,11 @@ def check_source_absent(
             raise RuntimeError(
                 f"{problem_id}: constraints[{at}] names the source title"
             )
+    # The reference notes, for the reason the rename above gives: both reach
+    # the candidate, one through the live prompt and one through the debrief.
+    for where in ("optimal", "pitfalls"):
+        if names_source(title, shipped[where]):
+            raise RuntimeError(f"{problem_id}: {where} names the source title")
 
 
 def check_entry_named(
@@ -451,6 +658,20 @@ def check_entry_named(
             raise RuntimeError(
                 f"{problem_id}: the {language} starter does not define {name}"
             )
+
+
+def check_c_return_size_ownership(problem_id: str, shipped: dict) -> None:
+    """A C array returned through returnSize states who frees its storage."""
+    code = shipped["starterCode"].get("c")
+    if code is None or not re.search(r"\breturnSize\b", code):
+        return
+    comments = "\n".join(re.findall(r"/\*.*?\*/|//[^\n]*", code, re.DOTALL))
+    if not re.search(
+        r"malloced.*caller calls free", comments, re.IGNORECASE | re.DOTALL
+    ):
+        raise RuntimeError(
+            f"{problem_id}: C starter with returnSize needs the malloc/free note"
+        )
 
 
 def published_cases(problem: dict, judge: dict) -> tuple[set, set]:
@@ -536,7 +757,9 @@ def rendered_examples(problem: dict, variant: dict, graded: dict) -> tuple[list,
                 )
         # Judge data is on the page too, and a published sample sentence can
         # carry the title: "This is an example of text justification."
-        if names_source(problem["title"], " ".join(rendered.values())):
+        if problem.get("title") and names_source(
+            problem["title"], " ".join(rendered.values())
+        ):
             raise RuntimeError(f"{problem_id}: examples[{at}] names the source title")
         examples.append(rendered)
     return examples, shown
@@ -579,11 +802,17 @@ def validated_variant(problem: dict, judge: dict, variant: object) -> dict:
     check_new_names(problem, judge, variant)
     shipped, graded = posed(problem, judge, variant)
     check_labels(problem_id, {**judge, "cases": graded["cases"]})
-    check_source_absent(problem, variant, text, shipped, graded)
+    original = not is_imported(problem)
+    if not original:
+        check_source_absent(problem, variant, text, shipped, graded)
     check_entry_named(problem_id, text["brief"], shipped, graded)
-    quotable, published = published_cases(problem, judge)
+    check_c_return_size_ownership(problem_id, shipped)
+    quotable, published = (
+        published_cases(problem, judge) if not original else (set(), set())
+    )
     examples, shown = rendered_examples(problem, variant, graded)
-    check_prose_quotes_nothing(problem_id, variant, text, quotable)
+    if not original:
+        check_prose_quotes_nothing(problem_id, variant, text, quotable)
     # The published examples are the most recognisable thing about a problem:
     # "pwwkew" or "paper" and "title" name it as surely as the title does. None
     # of them is shown, so a judge built only from them needs a case of its own.
@@ -601,6 +830,7 @@ def validated_variants(problems: list[dict], judges: dict, variants: object) -> 
     """
     if not isinstance(variants, dict):
         raise RuntimeError("variants must be a JSON object keyed by problem id")
+    check_judge_case_gaps(judges)
     ids = [problem["id"] for problem in problems]
     if list(variants) != ids:
         raise RuntimeError(

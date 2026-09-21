@@ -329,13 +329,22 @@ async fn reserved_room(state: &AppState) -> Result<(String, &crate::config::Prov
         // reaches the page as a bare socket error with no status attached, so a
         // candidate told only "could not connect" would go looking at their own
         // network for a quota this server already knows is spent.
-        ProviderChoice::AllExhausted => Err(json_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            json!({
-                "code": "livekit_quota_exhausted",
-                "error": "Every configured LiveKit project is out of connection minutes. Ask the operator to top one up."
-            }),
-        )),
+        ProviderChoice::AllUnavailable(unavailable) => {
+            let code = super::pool::ProviderVerdict::worst(
+                unavailable.iter().map(|(_, verdict)| *verdict),
+            )
+            .code();
+            let detail = super::pool::unavailable_projects(&unavailable).join(", ");
+            Err(json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({
+                    "code": code,
+                    "error": format!(
+                        "Every configured LiveKit project is unavailable ({detail}). Ask the operator to restore a credential or connection minutes."
+                    )
+                }),
+            ))
+        }
     }
 }
 

@@ -45,11 +45,12 @@ async fn report_packet(
             api_key,
             boot.report_model,
             &report_prompt_text(boot, state, elapsed_min),
+            boot.problem,
         ),
     )
     .await
     {
-        Ok(Ok(raw)) => final_report(Some(&raw), state.hints_used, None),
+        Ok(Ok(raw)) => final_report(Some(&raw), state.hints_used, None, boot.problem),
         Ok(Err(error)) => final_report(
             None,
             state.hints_used,
@@ -60,17 +61,90 @@ async fn report_packet(
                 error.as_ref(),
                 api_key,
             )),
+            boot.problem,
         ),
         Err(error) => final_report(
             None,
             state.hints_used,
             Some(&report_error_note(boot, state, reason, &error, api_key)),
+            boot.problem,
         ),
     };
+    stamp_report_debrief(&mut report, boot, state);
     stamp_report_contract(&mut report);
     Ok(report_data_packet(report_with_integrity_events(
         report, state, reason,
     ))?)
+}
+
+/// The teaching material that becomes useful only after an interview ends.
+///
+/// Every field here is bank-validated before it gets this far: the scenario
+/// contract, hints and follow-ups always were, and `optimal` and `pitfalls`
+/// joined them when `posed` started renaming them and `check_source_absent`
+/// started reading them. This filter is the backstop behind that, not the
+/// thing standing between a published name and a candidate, which is why it
+/// drops a field rather than refusing the report.
+fn stamp_report_debrief(
+    report: &mut serde_json::Value,
+    boot: &RuntimeBootstrap<'_>,
+    state: &RuntimeState,
+) {
+    let problem = boot.problem;
+
+    // The empty title an original problem gives matches no title but still
+    // refuses a practice site, which is what `validate_report_candidate`
+    // already does. Skipping the check for those problems instead would leave
+    // the one kind of exercise this filter cannot speak for.
+    let source_title = problem.source_title().unwrap_or("");
+    let safe = |field: &str, text: &str| {
+        if crate::agent::names_published_problem(source_title, text) {
+            eprintln!(
+                "codetrial report_debrief_dropped problem={} field={field}",
+                problem.id
+            );
+            None
+        } else {
+            Some(text.to_string())
+        }
+    };
+    let variant = problem.variant();
+    let hints = variant
+        .hints
+        .iter()
+        .enumerate()
+        .filter_map(|(index, hint)| {
+            safe("hints", hint).map(|text| {
+                serde_json::json!({
+                    "text": text,
+                    "given": index < state.hint_rungs_given,
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    let follow_ups = variant
+        .follow_ups
+        .iter()
+        .filter_map(|follow_up| safe("followUps", follow_up))
+        .collect::<Vec<_>>();
+    let debrief = serde_json::json!({
+        "scenarioContract": safe("scenarioContract", variant.contract),
+        "approach": safe("approach", problem.optimal),
+        "pitfalls": safe("pitfalls", problem.pitfalls),
+        "hints": hints,
+        "followUps": follow_ups,
+    });
+    if let Some(object) = report.as_object_mut() {
+        object.insert("debrief".to_string(), debrief);
+        object.insert(
+            "topics".to_string(),
+            serde_json::json!(crate::agent::topics_for(problem.id).unwrap_or(&[])),
+        );
+        object.insert(
+            "practiceLevel".to_string(),
+            serde_json::json!(boot.profile.seniority.map(crate::agent::Seniority::as_str)),
+        );
+    }
 }
 
 fn stamp_report_contract(report: &mut serde_json::Value) {
@@ -172,9 +246,12 @@ fn report_prompt_text(
         final_code: &state.code,
         language: &state.language,
         hints_used: state.hints_used,
+        hint_rung: state.hint_rungs_given,
+        volunteered_hints: state.volunteered_hints,
         duration_min: boot.duration_min,
         elapsed_min,
         test_summary: &test_summary,
+        practice_level: boot.profile.seniority.map(crate::agent::Seniority::as_str),
     })
 }
 

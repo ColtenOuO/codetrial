@@ -51,7 +51,7 @@
     {
       "id": "explicit-hint-use",
       "coverage": ["explicit-hint-use"],
-      "reaction": {"kind":"report", "code":"def two_sum(nums, target): return []", "required":["each hint", "2 hint(s) were given"], "forbidden":["0 hint(s)"]},
+      "reaction": {"kind":"report", "code":"def two_sum(nums, target): return []", "required":["2 total", "never as a numeric deduction"], "forbidden":["meaningfully reduce this score", "0 total"]},
       "transcript":"Interviewer suggested tracking prior complements; candidate then described a map.",
       "evidence":[{"phase":"algorithm","source":"candidate_speech","kind":"inferred","confidence":70,"summary":"Described the map after an explicit interviewer hint."}],
       "hintsUsed":2, "round":"none", "assessed":["Algorithm"]

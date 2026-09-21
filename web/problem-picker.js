@@ -130,7 +130,7 @@ export function pickProblem(problems, difficulties, reports, random = Math.rando
   const passed = new Set(
     reportList.filter((entry) => entry?.report?.decision === "HIRE").map((entry) => entry.problemId),
   );
-  const due = eligible.filter((problem) => reviews.get(problem.id)?.due);
+  const due = problems.filter((problem) => reviews.get(problem.id)?.due);
   const fresh = eligible.filter((problem) => !passed.has(problem.id));
   const choices = due.length ? due : fresh.length ? fresh : eligible;
   const picked = choices[Math.floor(random() * choices.length)];
@@ -140,14 +140,24 @@ export function pickProblem(problems, difficulties, reports, random = Math.rando
 }
 
 function reviewStatus(reports, now) {
-  const successes = new Map();
+  const outcomes = new Map();
   for (const entry of reports) {
-    if (entry?.report?.decision !== "HIRE" || !Number.isFinite(entry.at)) continue;
-    const seen = successes.get(entry.problemId);
-    successes.set(entry.problemId, { count: (seen?.count ?? 0) + 1, last: Math.max(seen?.last ?? -Infinity, entry.at) });
+    const decision = entry?.report?.decision;
+    if ((decision !== "HIRE" && decision !== "NO_HIRE") || !Number.isFinite(entry.at)) continue;
+    const entries = outcomes.get(entry.problemId) ?? [];
+    entries.push({ at: entry.at, decision });
+    outcomes.set(entry.problemId, entries);
   }
-  return new Map([...successes].map(([problemId, { count, last }]) => {
-    const intervalDays = REVIEW_INTERVAL_DAYS[Math.min(count, REVIEW_INTERVAL_DAYS.length) - 1];
-    return [problemId, { due: last + intervalDays * DAY_MS <= now, intervalDays }];
+  return new Map([...outcomes].map(([problemId, entries]) => {
+    // History is persisted newest first, while a failed result resets only
+    // the streak that follows it. Ordering explicitly keeps an older miss
+    // from erasing newer successful reviews and leaving no interval.
+    entries.sort((left, right) => left.at - right.at);
+    let successes = 0;
+    for (const entry of entries) successes = entry.decision === "HIRE" ? successes + 1 : 0;
+    const latest = entries.at(-1);
+    const intervalDays =
+      REVIEW_INTERVAL_DAYS[Math.max(Math.min(successes, REVIEW_INTERVAL_DAYS.length) - 1, 0)];
+    return [problemId, { due: latest.at + intervalDays * DAY_MS <= now, intervalDays }];
   }));
 }

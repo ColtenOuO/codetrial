@@ -102,7 +102,21 @@ export function showOutputNote(text) {
   nodes.meetOutputNote.hidden = !text;
 }
 
-export function readStored(key, storage = localStorage) {
+/// `localStorage` or `sessionStorage`, or `null` where site data is blocked:
+/// there, touching either global throws rather than returning a storage that
+/// refuses. The helpers below default through this rather than naming the
+/// global, because a default parameter is evaluated before their `try`, and
+/// every reader of the result already treats a failing call as "nothing
+/// stored", which `null` is.
+export function storageArea(name) {
+  try {
+    return globalThis[name];
+  } catch {
+    return null;
+  }
+}
+
+export function readStored(key, storage = storageArea("localStorage")) {
   try {
     return storage.getItem(key);
   } catch {
@@ -113,7 +127,7 @@ export function readStored(key, storage = localStorage) {
 /// An empty value clears the key: "no preference" and "the empty preference"
 /// are the same thing, and a separate clearStored existed only so one call site
 /// could pick between them.
-export function writeStored(key, value, storage = localStorage) {
+export function writeStored(key, value, storage = storageArea("localStorage")) {
   try {
     if (value) storage.setItem(key, value);
     else storage.removeItem(key);
