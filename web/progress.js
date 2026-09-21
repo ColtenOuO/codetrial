@@ -57,11 +57,25 @@ export function normalizeProgressEntry(raw) {
   };
 }
 
-export function buildProgressModel(rawEntries, filters = {}) {
-  const normalized = (Array.isArray(rawEntries) ? rawEntries : [])
+/// Every stored row read as an attempt, oldest first.
+///
+/// Separate from the model because a filter change rebuilds the model and does
+/// not change this: `normalizeProgressEntry` sanitizes a whole report each
+/// time, and the device history is up to twenty short rows plus five hundred
+/// full ones, so re-running it on every dropdown change was five hundred
+/// report sanitizations to re-sort rows that had not moved.
+export function normalizeProgressEntries(rawEntries) {
+  return (Array.isArray(rawEntries) ? rawEntries : [])
     .map(normalizeProgressEntry)
     .filter((entry) => entry.at !== null)
     .sort((left, right) => left.at - right.at);
+}
+
+export function buildProgressModel(rawEntries, filters = {}) {
+  return progressModelFrom(normalizeProgressEntries(rawEntries), filters);
+}
+
+export function progressModelFrom(normalized, filters = {}) {
   const matches = (entry, key) => filters[key] == null || filters[key] === "all"
     || String(entry[key]) === String(filters[key]);
   const attempts = normalized.filter((entry) =>
@@ -103,7 +117,19 @@ export function buildProgressModel(rawEntries, filters = {}) {
   const weaknesses = [...weaknessCounts]
     .map(([tag, count]) => ({ tag, count }))
     .sort((left, right) => right.count - left.count || left.tag.localeCompare(right.tag));
-  return { total: normalized.length, attempts, series, weaknesses, options: progressOptions(normalized) };
+  const topics = new Map();
+  for (const attempt of attempts) {
+    for (const topic of new Set(attempt.report.topics || [])) {
+      const row = topics.get(topic) || { topic, attempts: 0, passes: 0 };
+      row.attempts += 1;
+      row.passes += Number(!attempt.report.incomplete && attempt.report.decision === "HIRE");
+      row.lastAttempt = attempt.at;
+      topics.set(topic, row);
+    }
+  }
+  const topicProgress = [...topics.values()]
+    .sort((left, right) => left.topic.localeCompare(right.topic));
+  return { total: normalized.length, attempts, series, weaknesses, topics: topicProgress, options: progressOptions(normalized) };
 }
 
 function progressOptions(entries) {

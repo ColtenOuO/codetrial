@@ -1374,11 +1374,11 @@ lobbyTest("a cap under every length on offer leaves the row alone", async (page)
 });
 
 test("a failed history load leaves no other account's attempts behind", () => {
-  // reports and progressEntries outlive the panel: recommendations and every
-  // filter change read them again. Clearing only the DOM left the lobby
+  // reports and progressNormalized outlive the panel: recommendations and
+  // every filter change read them again. Clearing only the DOM left the lobby
   // answering from whichever history it had last loaded successfully, which
   // after a sign-out is a different person's.
   const shown = functionBody(read("web/app.js"), "showProgressError");
   assert.match(shown, /reports = \[\]/);
-  assert.match(shown, /progressEntries = \[\]/);
+  assert.match(shown, /progressNormalized = \[\]/);
 });

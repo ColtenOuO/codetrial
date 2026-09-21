@@ -1,7 +1,7 @@
 import { FRAMEWORKS, codingLoop } from "./lib.js";
 import { clearReportHistory, readDeviceHistory, renameLocalHistory } from "./history.js";
 import { pickProblem, practiceFocus, storeSharedFocus, suggestDifficulty } from "./problem-picker.js";
-import { buildProgressModel, pickerEntry } from "./progress.js";
+import { normalizeProgressEntries, pickerEntry, progressModelFrom } from "./progress.js";
 import { reportMarkup } from "./render.js";
 import { loadPageMap } from "./problem-data.js";
 import { parseGroundingFile, retainedSelection, selectedGroundingPacket, storeGroundingPacket } from "./document-grounding.js";
@@ -52,6 +52,7 @@ const nodes = {
   attemptHistory: document.querySelector("#attempt-history"),
   progressTrends: document.querySelector("#progress-trends"),
   progressWeaknesses: document.querySelector("#progress-weaknesses"),
+  progressTopics: document.querySelector("#progress-topics"),
   progressDifficulty: document.querySelector("#progress-difficulty"),
   progressLanguage: document.querySelector("#progress-language"),
   progressDuration: document.querySelector("#progress-duration"),
@@ -163,7 +164,7 @@ nodes.groundingJd.addEventListener("change", () => loadGroundingFile("jd"));
 nodes.groundingResume.addEventListener("change", () => loadGroundingFile("resume"));
 nodes.groundingClear.addEventListener("click", clearGrounding);
 
-let progressEntries = [];
+let progressNormalized = [];
 let progressSuffix = "saved";
 /// Whether the history on screen came from an account: null until /api/session
 /// answers, and never assumed false, because a browser that cannot ask is not a
@@ -735,27 +736,30 @@ function showProgressError(message) {
   // load one account's history went on answering from whichever account's
   // history it had last managed to load.
   reports = [];
-  progressEntries = [];
+  progressNormalized = [];
   renderPracticeFocus();
   nodes.historyHeader.hidden = false;
   nodes.history.hidden = false;
   nodes.progressSummary.textContent = message;
   nodes.progressTrends.replaceChildren();
   nodes.progressWeaknesses.replaceChildren();
+  nodes.progressTopics.replaceChildren();
+  nodes.attemptHistory.replaceChildren();
 }
 
 function showProgress(entries, suffix) {
   renderPracticeFocus();
-  progressEntries = entries;
+  // Normalized once here, not per render: the filters below only select from
+  // these rows, so a dropdown change has nothing to re-sanitize.
+  progressNormalized = normalizeProgressEntries(entries);
   progressSuffix = suffix;
   const erasable = entries.length > 0 || readDeviceHistory().length > 0;
   nodes.historyHeader.hidden = !erasable;
   nodes.history.hidden = false;
-  const model = buildProgressModel(progressEntries);
+  const model = progressModelFrom(progressNormalized);
   syncFilter(nodes.progressDifficulty, model.options.difficulty, (value) => value);
   syncFilter(nodes.progressLanguage, model.options.language, languageLabel);
   syncFilter(nodes.progressDuration, model.options.durationMin, (value) => `${value} min`);
-  renderAttemptHistory(model.attempts);
   renderProgress();
 }
 
@@ -810,9 +814,11 @@ function renderProgress() {
     language: nodes.progressLanguage.value,
     durationMin: nodes.progressDuration.value,
   };
-  const model = buildProgressModel(progressEntries, filters);
+  const model = progressModelFrom(progressNormalized, filters);
   nodes.progressTrends.replaceChildren();
   nodes.progressWeaknesses.replaceChildren();
+  nodes.progressTopics.replaceChildren();
+  renderAttemptHistory(model.attempts);
   if (model.total === 0) {
     nodes.history.hidden = true;
     return;
@@ -866,6 +872,17 @@ function renderProgress() {
       const item = document.createElement("li");
       item.textContent = `${weakness.tag} · ${weakness.count} attempt${weakness.count === 1 ? "" : "s"}`;
       nodes.progressWeaknesses.append(item);
+    }
+  }
+  if (model.topics.length === 0) {
+    const item = document.createElement("li");
+    item.textContent = "No topic labels are available for these attempts.";
+    nodes.progressTopics.append(item);
+  } else {
+    for (const topic of model.topics) {
+      const item = document.createElement("li");
+      item.textContent = `${topic.topic}: ${topic.attempts} attempt${topic.attempts === 1 ? "" : "s"}, ${topic.passes} pass${topic.passes === 1 ? "" : "es"}; last attempt ${new Date(topic.lastAttempt).toLocaleDateString()}`;
+      nodes.progressTopics.append(item);
     }
   }
 }
