@@ -201,6 +201,35 @@ test("adding then running during judge load shares one addition", async (t) => {
   }
 });
 
+test("code that never runs is reported, not swallowed", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage();
+  try {
+    await page.goto(base);
+    // The candidate's code is the worker's own first statements now rather
+    // than a string evaluated inside it, which is what lets the page withhold
+    // `unsafe-eval`. It also moves where a failure to run surfaces: a syntax
+    // error stops the worker script instead of throwing out of an eval, so it
+    // arrives through `onerror`. Both still have to reach the candidate as the
+    // reason their run produced nothing.
+    const results = await page.evaluate(async () => {
+      const { runBrowserTests } = await import("/runners.js");
+      const run = (code) => runBrowserTests("chargeback-pair-match", code, "javascript");
+      const [broken, throwing, missing] = await Promise.all([
+        run("function matchDisputedCharge( {{{"),
+        run("throw new Error('boom at top level');"),
+        run("const notTheEntry = 1;"),
+      ]);
+      return [broken.setupError, throwing.setupError, missing.setupError];
+    });
+    assert.match(results[0], /SyntaxError/);
+    assert.match(results[1], /boom at top level/);
+    assert.match(results[2], /Could not find matchDisputedCharge/);
+  } finally {
+    await page.close();
+  }
+});
+
 test("a malformed candidate case stops the run it was typed into", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
   const page = await browser.newPage();

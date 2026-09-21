@@ -34,6 +34,51 @@ async fn production_promises_the_browser_it_will_stay_on_https() {
     server.abort();
 }
 
+/// The page refuses `eval`; the one worker that cannot is served its own
+/// policy that allows it.
+///
+/// A worker fetched over http(s) takes its policy from its own response rather
+/// than inheriting the document's, which is the whole reason MediaPipe's
+/// emscripten glue can keep building functions from text without the interview
+/// page being allowed to. Both halves are asserted here: granting eval to the
+/// worker is only worth anything while the document still refuses it.
+#[tokio::test]
+async fn only_the_face_worker_may_evaluate_a_string() {
+    let (base, server) = spawn_web_server(WebServerConfig {
+        web_dir: Path::new("web").to_path_buf(),
+        pool: primary_pool("wss://example.livekit.cloud:443", "devkey", "devsecret"),
+        probe_provider_quota: false,
+        ..web_config()
+    })
+    .await;
+
+    let page = reqwest::get(&base).await.unwrap();
+    let page_policy = page
+        .headers()
+        .get("content-security-policy")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(!page_policy.contains("'unsafe-eval'"), "{page_policy}");
+    assert!(page_policy.contains("'wasm-unsafe-eval'"), "{page_policy}");
+
+    let worker = reqwest::get(format!("{base}/face-worker.js"))
+        .await
+        .unwrap();
+    assert_eq!(worker.status(), reqwest::StatusCode::OK);
+    let worker_policy = worker
+        .headers()
+        .get("content-security-policy")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(worker_policy.contains("'unsafe-eval'"), "{worker_policy}");
+
+    server.abort();
+}
+
 #[tokio::test]
 async fn responses_carry_baseline_security_headers() {
     let (base, server) = spawn_web_server(WebServerConfig {
@@ -88,13 +133,18 @@ async fn responses_carry_baseline_security_headers() {
         assert!(policy.contains(directive), "{directive} missing: {policy}");
     }
 
-    // The runner evaluates candidate code in a blob Worker, which inherits this
-    // document's policy, so dropping `unsafe-eval` would silently break test
-    // runs rather than fail a check. Pinned so the trade-off stays deliberate.
+    // A blob Worker inherits this document's policy, so what the runner needs
+    // is what every script on the interview page is granted. It needs Pyodide
+    // to compile wasm and nothing more: the candidate's JavaScript is built
+    // into the worker rather than evaluated inside it. Both halves are pinned,
+    // the grant and the refusal, because widening this back to `unsafe-eval`
+    // would restore eval to the one page that renders the candidate's own text
+    // and no test run would look any different.
     assert!(
-        policy.contains("script-src 'self' blob: 'unsafe-eval'"),
+        policy.contains("script-src 'self' blob: 'wasm-unsafe-eval'"),
         "{policy}"
     );
+    assert!(!policy.contains("'unsafe-eval'"), "{policy}");
 
     // A .vrm is a GLB, so its textures are always bufferView-backed: GLTFLoader
     // mints a `blob:` URL per image and ImageBitmapLoader reads it with

@@ -298,7 +298,9 @@ async function runCompilerExplorer(language, code, spec, reportStatus = null) {
 // 23-line function read as a 278-line one.
 const JS_RUNNER_SOURCE = `
     self.onmessage = (event) => {
-      const { code, spec } = event.data;
+      // \`name\` is the one \`runWorker\` checked and bound in the prelude, sent
+      // rather than re-derived so the message names what was looked up.
+      const { spec, name } = event.data;
       const sanitize = (value) => {
         const normalized = value === undefined ? null : value;
         try { return JSON.parse(JSON.stringify(normalized)); } catch { return String(normalized); }
@@ -503,14 +505,9 @@ const JS_RUNNER_SOURCE = `
         });
         return converted;
       };
-      const name = spec.kind === "class" ? spec.className : spec.entry;
-      let entry;
-      try {
-        entry = (0, eval)(code + "\\n;(typeof " + name + " !== 'undefined' ? " + name + " : undefined);");
-      } catch (error) {
-        self.postMessage({ setupError: String((error && error.message) || error).slice(0, 400) });
-        return;
-      }
+      // Resolved by the prelude this worker was built with, not by evaluating
+      // the candidate's code here. See runWorker below.
+      const entry = self.__codetrialEntry;
       if (typeof entry !== "function") {
         self.postMessage({ setupError: "Could not find " + name + " in your code - keep the starter signature." });
         return;
@@ -552,9 +549,34 @@ const JS_RUNNER_SOURCE = `
     };
   `;
 
+/// The candidate's JavaScript, run as the first statements of the worker
+/// rather than evaluated from a string inside it.
+///
+/// Both forms run the same code with the same reach. The difference is what
+/// the page has to be allowed to do: evaluating a string needs
+/// `script-src 'unsafe-eval'`, and a blob worker inherits the document's
+/// policy, so that permission could not be confined to the worker. It applied
+/// to every script on the interview page, which is the one place a candidate's
+/// own text is already being rendered. A worker built from the code needs only
+/// `blob:`, so the page keeps no eval at all.
+///
+/// The parts go into `Blob` as separate strings, so nothing has to be escaped:
+/// code holding a backtick or `${` is data here, not source being spliced. The
+/// entry name is the one thing interpolated, and it comes from the judge rather
+/// than the candidate; it is checked against an identifier anyway, because a
+/// name reaching this line is a name being written into a program.
 function runWorker(code, spec) {
   return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(new Blob([JS_RUNNER_SOURCE], { type: "application/javascript" }));
+    const name = spec.kind === "class" ? spec.className : spec.entry;
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name ?? "")) {
+      reject(new Error("This exercise does not name a function the runner can call."));
+      return;
+    }
+    const prelude = [
+      code,
+      "\n;self.__codetrialEntry = (typeof ", name, " !== 'undefined' ? ", name, " : undefined);\n",
+    ];
+    const url = URL.createObjectURL(new Blob([...prelude, JS_RUNNER_SOURCE], { type: "application/javascript" }));
     const worker = new Worker(url);
     const timer = setTimeout(() => {
       worker.terminate();
@@ -573,7 +595,7 @@ function runWorker(code, spec) {
       URL.revokeObjectURL(url);
       reject(new Error(event.message || "Worker crashed while running your code."));
     };
-    worker.postMessage({ code, spec });
+    worker.postMessage({ spec, name });
   });
 }
 

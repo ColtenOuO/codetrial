@@ -10,7 +10,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { functionBody, read } from "./source.js";
+import { failFetchWith, functionBody, read } from "./source.js";
 import { parseCandidateCase, runBrowserTests } from "../../web/runners.js";
 
 const runners = read("web/runners.js");
@@ -223,12 +223,12 @@ test("an observed candidate error keeps its expectation absent", async () => {
 });
 
 test("each worker is built from its own source", () => {
-  const blobs = [...runners.matchAll(/new Blob\(\[(\w+)\]/g)].map((match) => match[1]);
+  const blobs = [...runners.matchAll(/new Blob\(\[[^\]]*?(\w+)\]/g)].map((match) => match[1]);
   assert.equal(blobs.length, 2, "a third worker needs its own assertion here");
 
   assert.match(
     functionBody(runners, "runWorker"),
-    /new Blob\(\[JS_RUNNER_SOURCE\]/,
+    /new Blob\(\[\.\.\.prelude, JS_RUNNER_SOURCE\]/,
     "the JavaScript runner must build its worker from the hoisted runner source",
   );
 
@@ -239,6 +239,22 @@ test("each worker is built from its own source", () => {
     "the Python worker must build its worker from the Pyodide loader it just fetched, not from the JavaScript runner",
   );
   assert.match(python, /loadPyodide\(/, "the Python worker source has to load Pyodide");
+});
+
+test("the runner evaluates no string, so the page needs no unsafe-eval", () => {
+  // The candidate's code is the first statements of the worker, not an
+  // argument to eval inside it. This is what lets the page's
+  // Content-Security-Policy withhold `unsafe-eval`: a blob worker inherits the
+  // document's policy, so an eval here would have to be permitted for every
+  // script on the interview page, which is where the candidate's own text is
+  // already rendered.
+  assert.doesNotMatch(runners, /\beval\s*\(/, "web/runners.js evaluates a string");
+  assert.doesNotMatch(runners, /new Function\s*\(/, "web/runners.js builds a function from text");
+  assert.match(
+    functionBody(runners, "runWorker"),
+    /__codetrialEntry/,
+    "the entry point must be resolved by the worker prelude",
+  );
 });
 
 // Hoisting the runner source to module scope is only correct while it reads
