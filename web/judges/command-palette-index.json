@@ -153,6 +153,25 @@
         true,
         false
       ]
+    },
+    {
+      "label": "no stored words",
+      "input": [
+        [
+          "CommandIndex",
+          "search"
+        ],
+        [
+          [],
+          [
+            "a"
+          ]
+        ]
+      ],
+      "expected": [
+        null,
+        false
+      ]
     }
   ],
   "methodReturnTypes": {

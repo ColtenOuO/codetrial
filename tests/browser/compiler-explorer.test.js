@@ -243,6 +243,7 @@ describe("toolchain harnesses", { concurrency: true }, () => {
         [1, 2],
         [0, 1],
         [0, 2],
+        [1, 2],
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
