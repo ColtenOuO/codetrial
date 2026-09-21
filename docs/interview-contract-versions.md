@@ -8,10 +8,11 @@ can select it.
 
 ## The active bundle
 
-Bundle 10: live prompt 3, report prompt 9, rubric 1, report schema 2.
+Bundle 11: live prompt 3, report prompt 10, rubric 1, report schema 2.
 
 | Bundle | Introduced |
 |---|---|
+| 11 | Candidate-authored test evidence includes the bounded input beside its result, so the interviewer and report reviewer can identify the case. |
 | 10 | Hints remain qualitative context for candidate independence rather than automatic numeric communication-score deductions. |
 | 9 | Reports keep the fixed mid-level hiring bar and state the optional level the candidate practiced for beside it. |
 | 8 | Candidate-authored test cases reach the live interviewer and report brief, while judge pass totals remain separate. |

@@ -195,7 +195,7 @@ test("runBrowserTests reports the output of a candidate case", async () => {
     assert.equal(summary.passed, 1);
     assert.equal(summary.total, 1);
     assert.deepEqual(summary.cases.at(-1), {
-      label: "Your case 1", pass: null, got: "7", expected: undefined, timeMs: 2, candidate: true,
+      label: "Your case 1", pass: null, got: "7", expected: undefined, input: "[7]", timeMs: 2, candidate: true,
     });
   } finally {
     restoreFetch();
@@ -214,6 +214,7 @@ test("an observed candidate error keeps its expectation absent", async () => {
   });
   try {
     const summary = await runBrowserTests("candidate-case-error", "", "cpp", null, [{ input: [7] }]);
+    assert.equal(summary.cases.at(-1).input, "[7]");
     assert.equal(summary.cases.at(-1).expected, undefined);
     assert.equal(summary.cases.at(-1).error, "boom");
   } finally {

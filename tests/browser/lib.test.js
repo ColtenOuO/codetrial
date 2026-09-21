@@ -194,7 +194,7 @@ test("testPayload keeps the agent wire contract and caps failures at four", () =
     setupError: "",
     cases: [
       { label: "ok", pass: true },
-      ...Array.from({ length: 6 }, (_, index) => ({ label: `mine-${index}`, candidate: true, pass: null, got: `[${index}]` })),
+      ...Array.from({ length: 6 }, (_, index) => ({ label: `mine-${index}`, candidate: true, pass: null, input: `[${index}]`, got: `[${index}]` })),
       ...Array.from({ length: 6 }, (_, index) => ({
         label: `bad-${index}`,
         pass: false,
@@ -222,6 +222,7 @@ test("testPayload keeps the agent wire contract and caps failures at four", () =
   assert.equal(payload.failures[0].error, null);
   assert.deepEqual(payload.candidateCases, Array.from({ length: 5 }, (_, index) => ({
     label: `mine-${index}`,
+    input: `[${index}]`,
     expected: null,
     got: `[${index}]`,
     error: null,

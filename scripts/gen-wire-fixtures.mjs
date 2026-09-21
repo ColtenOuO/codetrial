@@ -132,6 +132,7 @@ function testResultsCases() {
             ...Array.from({ length: lib.CANDIDATE_CASE_LIMIT + 1 }, (_, offset) => offset + 1).map((index) => ({
               label: `Your case ${index}`,
               candidate: true,
+              input: `[${index}]`,
               pass: null,
               got: `[${index}]`,
               timeMs: index,

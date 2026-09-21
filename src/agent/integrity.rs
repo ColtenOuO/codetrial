@@ -124,6 +124,7 @@ pub fn sanitize_test_run(payload: &serde_json::Value) -> serde_json::Value {
                             // unconditionally, and a null reads as a test named
                             // None.
                             "label": text(case.get("label")).unwrap_or_else(|| "?".to_string()),
+                            "input": text(case.get("input")),
                             "expected": text(case.get("expected")),
                             "got": text(case.get("got")),
                             "error": text(case.get("error")),

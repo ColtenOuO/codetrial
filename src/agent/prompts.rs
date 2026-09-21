@@ -1076,8 +1076,17 @@ pub fn format_test_run(run: Option<&serde_json::Value>, total_runs: u32) -> Stri
             .take(MAX_CANDIDATE_CASES)
         {
             let label = value_string(case.get("label")).unwrap_or_else(|| "?".to_string());
+
+            // Filtered before rendering, the way `expected` below is: the
+            // sanitizer writes the key on every case, so a run recorded before
+            // the browser sent one carries a null here and `value_string`
+            // spells that "None". A replayed interview would read "with input
+            // None" rather than saying nothing about an input it never had.
+            let input = value_string(case.get("input").filter(|value| !value.is_null()))
+                .map(|input| format!(" with input {input}"))
+                .unwrap_or_default();
             if let Some(error) = truthy_string(case.get("error")) {
-                lines.push(format!("- CANDIDATE CASE {label}: raised {error}"));
+                lines.push(format!("- CANDIDATE CASE {label}{input}: raised {error}"));
             } else {
                 let got = value_string(case.get("got")).unwrap_or_else(|| "None".to_string());
 
@@ -1087,7 +1096,9 @@ pub fn format_test_run(run: Option<&serde_json::Value>, total_runs: u32) -> Stri
                 let expected = value_string(case.get("expected").filter(|value| !value.is_null()))
                     .map(|expected| format!(", candidate expected {expected}"))
                     .unwrap_or_default();
-                lines.push(format!("- CANDIDATE CASE {label}: got {got}{expected}"));
+                lines.push(format!(
+                    "- CANDIDATE CASE {label}{input}: got {got}{expected}"
+                ));
             }
         }
     }

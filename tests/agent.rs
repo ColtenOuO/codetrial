@@ -282,7 +282,7 @@ fn prompt_samples() -> Value {
             volunteered_hints: 0,
             duration_min: 45,
             elapsed_min: 12.4,
-            test_summary: "Latest test run: 2/3 cases passed.\n- CANDIDATE CASE empty input: got []",
+            test_summary: "Latest test run: 2/3 cases passed.\n- CANDIDATE CASE empty input with input [[]]: got []",
             practice_level: None,
         }),
         "reportEmpty": report_prompt(ReportPromptInput {
@@ -726,38 +726,25 @@ fn prompt_golden_digest_matches_versions() {
             serde_json::to_vec(&expected).expect("parsed prompt fixture should serialize")
         )
     );
-    let versions = (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION);
-    let expected_digest = [
-        (
-            (3, 6),
-            "1ce00ef082086e6b4184a343fefc694fc34cbbfdb620191f76e8c4417ec03744",
-        ),
-        (
-            (3, 7),
-            "54aa0b470e79ce3b4b299d278fc2947679a70f750926a1cfcd61831859a62b8d",
-        ),
-        (
-            (3, 8),
-            "1be28b91ea6148c278f262c01d61670563ff4752b37ad517675284e9304a5825",
-        ),
-        (
-            (3, 9),
-            "4f9e1aac81d6479abbe454d3eeb8dad27f414c2b311bc6cf89165dad9566ce1f",
-        ),
-    ]
-    .into_iter()
-    .find_map(|(candidate, digest)| (candidate == versions).then_some(digest));
+    // The versions the digest below was recorded against, and that digest.
+    //
+    // Only the current pair, not a table of every pair this branch has held: a
+    // version never comes back down, so an older row can never match again and
+    // its hash is a string nothing checks. The pair is still asserted, because
+    // the failure worth catching is a version bumped with the golden left
+    // alone, which a digest comparison on its own reads as fine.
+    let recorded_versions = (3, 10);
+    let recorded_digest = "d2399eb54dd9443cd28f97ea61c0f8978d17b63844822503755607a2e56c7867";
 
-    match expected_digest {
-        Some(expected_digest) => assert_eq!(
-            digest, expected_digest,
-            "prompt golden digest changed to {digest}; bump the prompt version it changed and record the new digest"
-        ),
-        None => panic!(
-            "prompt versions {:?} have no golden digest; the new digest is {digest}. Bump the prompt version it changed and record it here",
-            versions
-        ),
-    }
+    assert_eq!(
+        (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
+        recorded_versions,
+        "prompt versions moved without recording a golden digest; the digest now is {digest}"
+    );
+    assert_eq!(
+        digest, recorded_digest,
+        "prompt golden digest changed to {digest}; bump the prompt version it changed and record the new digest"
+    );
 }
 
 #[test]
@@ -2399,12 +2386,12 @@ fn test_summary_lists_the_candidates_cases() {
         "total": 2,
         "failures": [],
         "candidateCases": [
-            {"label": "Your case 1", "got": "[0, 1]", "expected": null},
-            {"label": "Your case 2", "error": "ValueError"},
-            {"label": "Your case 3", "got": "[0, 1]", "expected": "[1, 2]"},
-            {"label": "Your case 4", "got": "4"},
-            {"label": "Your case 5", "got": "5"},
-            {"label": "Your case 6", "got": "6"}
+            {"label": "Your case 1", "input": "[[]]", "got": "[0, 1]", "expected": null},
+            {"label": "Your case 2", "input": "[[1]]", "error": "ValueError"},
+            {"label": "Your case 3", "input": "[[3,3],6]", "got": "[0, 1]", "expected": "[1, 2]"},
+            {"label": "Your case 4", "input": "[4]", "got": "4"},
+            {"label": "Your case 5", "input": "[5]", "got": "5"},
+            {"label": "Your case 6", "input": "[6]", "got": "6"}
         ]
     }));
     let summary = format_test_run(Some(&run), 1);
@@ -2412,10 +2399,28 @@ fn test_summary_lists_the_candidates_cases() {
 
     // A case with no expectation says only what it printed, so the reviewer
     // cannot read a contradiction into it.
-    assert!(summary.contains("CANDIDATE CASE Your case 1: got [0, 1]\n"));
-    assert!(summary.contains("CANDIDATE CASE Your case 2: raised ValueError"));
-    assert!(summary.contains("CANDIDATE CASE Your case 3: got [0, 1], candidate expected [1, 2]"));
-    assert!(summary.contains("CANDIDATE CASE Your case 5: got 5"));
+    assert!(summary.contains("CANDIDATE CASE Your case 1 with input [[]]: got [0, 1]\n"));
+    assert!(summary.contains("CANDIDATE CASE Your case 2 with input [[1]]: raised ValueError"));
+    assert!(summary.contains(
+        "CANDIDATE CASE Your case 3 with input [[3,3],6]: got [0, 1], candidate expected [1, 2]"
+    ));
+    assert!(summary.contains("CANDIDATE CASE Your case 5 with input [5]: got 5"));
+
+    // A run recorded before the browser sent inputs still has a case list, and
+    // the sanitizer writes the key on every case, so the null it leaves has to
+    // read as nothing rather than as an input of "None".
+    let older = sanitize_test_run(&json!({
+        "passed": 1,
+        "total": 1,
+        "failures": [],
+        "candidateCases": [{"label": "Your case 1", "got": "[0, 1]", "expected": null}]
+    }));
+    let older = format_test_run(Some(&older), 1);
+    assert!(older.contains("CANDIDATE CASE Your case 1: got [0, 1]"));
+    assert!(
+        !older.contains("with input"),
+        "a case with no recorded input claimed one: {older}"
+    );
 
     // Six sent, five kept.
     assert!(!summary.contains("Your case 6"));
@@ -4622,6 +4627,11 @@ fn sanitize_test_run_bounds_every_field_the_prompt_renders() {
                 "error": "r".repeat(1_000),
             }))
             .collect::<Vec<_>>(),
+        "candidateCases": [{
+            "label": "mine",
+            "input": "i".repeat(1_000),
+            "got": "g",
+        }],
         "at": 1,
     });
     let clean = sanitize_test_run(&forged);
@@ -4652,6 +4662,14 @@ fn sanitize_test_run_bounds_every_field_the_prompt_renders() {
             );
         }
     }
+    assert_eq!(
+        clean["candidateCases"][0]["input"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .count(),
+        200,
+    );
 
     // U+2028 is a separator rather than a control, so it survives `is_control`
     // and a model reading the prompt may still break a line on it.
@@ -5346,17 +5364,17 @@ fn interview_contract_versions_are_one_closed_bundle() {
         "the bundle table has no row for {INTERVIEW_CONTRACT_BUNDLE_VERSION}"
     );
 
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 10);
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 11);
     assert_eq!(LIVE_PROMPT_VERSION, 3);
-    assert_eq!(REPORT_PROMPT_VERSION, 9);
+    assert_eq!(REPORT_PROMPT_VERSION, 10);
     assert_eq!(RUBRIC_VERSION, 1);
     assert_eq!(REPORT_SCHEMA_VERSION, 2);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 10,
+            "bundleVersion": 11,
             "livePromptVersion": 3,
-            "reportPromptVersion": 9,
+            "reportPromptVersion": 10,
             "rubricVersion": 1,
             "reportSchemaVersion": 2,
         })
