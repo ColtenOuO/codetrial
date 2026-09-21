@@ -240,8 +240,10 @@ async fn the_quota_stub_refuses_a_probe_that_carries_the_wrong_credential() {
 
 #[tokio::test]
 async fn refresh_all_preserves_each_project_verdict() {
-    let (spent_url, spent_server) = quota_stub(axum::http::StatusCode::TOO_MANY_REQUESTS).await;
-    let (healthy_url, healthy_server) = quota_stub(axum::http::StatusCode::OK).await;
+    let (spent_url, spent_probes, spent_server) =
+        counting_quota_stub(axum::http::StatusCode::TOO_MANY_REQUESTS).await;
+    let (healthy_url, healthy_probes, healthy_server) =
+        counting_quota_stub(axum::http::StatusCode::OK).await;
 
     let mut config = config_with(&["spent", "healthy"]);
     config.pool.providers[0].url = spent_url;
@@ -258,7 +260,11 @@ async fn refresh_all_preserves_each_project_verdict() {
     );
 
     // And the verdicts landed in the cache the request path reads, so a token
-    // request pays no probe of its own.
+    // request pays no probe of its own. Counted, because a stub answers a fresh
+    // probe exactly as the cache would, and the verdicts alone cannot tell the
+    // two apart. `refresh_all` is awaited here, which is what the server-level
+    // test cannot do: there, a token request may land between the refresher's
+    // probe and its cache write.
     assert_eq!(
         quota.verdict_for(&config.pool.providers[0]).await,
         ProviderVerdict::OutOfMinutes
@@ -266,6 +272,14 @@ async fn refresh_all_preserves_each_project_verdict() {
     assert_eq!(
         quota.verdict_for(&config.pool.providers[1]).await,
         ProviderVerdict::Available
+    );
+    assert_eq!(
+        (
+            spent_probes.load(Ordering::Relaxed),
+            healthy_probes.load(Ordering::Relaxed)
+        ),
+        (1, 1),
+        "the request path read the refreshed cache rather than probing again"
     );
 
     spent_server.abort();

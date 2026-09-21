@@ -233,21 +233,27 @@ async fn a_late_provider_failure_does_not_fail_a_queued_recording() {
 ///
 /// Before this, the quota verdict was learned lazily on `/api/token` and cached
 /// for a minute, so one request in each window waited on an HTTP round trip per
-/// project it had to consider. The background refresher keeps the cache warm,
-/// which is observable here as a token request that adds no probe of its own.
+/// project it had to consider. The background refresher keeps the cache warm.
+///
+/// What this server-level test can see is the probe arriving with nobody
+/// asking for a token. That the request path then reads the cache is proved in
+/// `refresh_all_preserves_each_project_verdict`, where the refresh is awaited:
+/// here the stub counts a probe before the refresher has written its verdict,
+/// so a token request sent in between would probe on its own and fail a test
+/// that asserted otherwise.
 #[tokio::test]
-async fn the_pool_probes_in_the_background_so_a_token_request_does_not() {
+async fn the_pool_probes_in_the_background_without_a_token_request() {
     let (provider, hits, stub) =
         spawn_counting_quota_stub(axum::http::StatusCode::OK, Duration::ZERO, "key", "secret")
             .await;
 
-    let (mut config, cookie, db_path) = signed_in_web_config("quota-background-probe");
+    let (mut config, _cookie, db_path) = signed_in_web_config("quota-background-probe");
     config.pool = primary_pool(&provider, "key", "secret");
 
     // The one test that wants the refresher, pointed at a local stub. Every
     // other server here leaves it off, so the suite makes no outbound request.
     config.probe_provider_quota = true;
-    let (base, server) = spawn_web_server(config).await;
+    let (_base, server) = spawn_web_server(config).await;
 
     // The startup pass is the refresher's first action, not a step that blocks
     // the bind, so it is raced against here rather than assumed complete.
@@ -262,22 +268,6 @@ async fn the_pool_probes_in_the_background_so_a_token_request_does_not() {
     assert!(
         probed > 0,
         "the pool must probe its projects without being asked for a token"
-    );
-
-    let response = reqwest::Client::new()
-        .post(format!("{base}/api/token"))
-        .header("cookie", &cookie)
-        .header("content-type", "application/json")
-        .body("{}")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-
-    assert_eq!(
-        hits.load(std::sync::atomic::Ordering::Relaxed),
-        probed,
-        "the token request must be served from the warm cache, not from a fresh probe"
     );
 
     server.abort();
