@@ -643,6 +643,23 @@ lobbyTest("history saved on this device under published ids still counts as pass
   assert.deepEqual(state.levels, ["Hard"]);
 });
 
+lobbyTest("short local history remains visible when full reports exceed the review budget", async (page) => {
+  session = { signedIn: false };
+  await page.addInitScript((problemId) => {
+    const entries = Array.from({ length: 20 }, (_, index) => ({
+      ...(index < 10 ? { id: `attempt-${index}` } : {}),
+      problemId,
+      problemTitle: "Two Sum",
+      date: `2026-01-${String(index + 1).padStart(2, "0")}T00:00:00Z`,
+      report: { decision: "HIRE", summary: "x".repeat(20_000) },
+    }));
+    localStorage.setItem("codetrial_history", JSON.stringify(entries));
+  }, EASY[0]);
+
+  await lobby(page);
+  assert.equal(await page.getByRole("button", { name: "Open report" }).count(), 20);
+});
+
 lobbyTest("a lobby with no old history never fetches the published names", async (page) => {
   const fetched = [];
   page.on("request", (request) => fetched.push(new URL(request.url()).pathname));
@@ -681,6 +698,37 @@ lobbyTest("a completed problem returns with a due-review explanation", async (pa
   const state = await snapshot(page);
   assert.equal(state.card, EASY[0]);
   assert.match(state.note, /Review due after 1 day/);
+});
+
+lobbyTest("a saved report reopens from the lobby", async (page) => {
+  reports = [savedAttempt(EASY[0])];
+  await lobby(page);
+  await page.getByRole("button", { name: "Open report" }).click();
+  assert.equal(await page.locator("#attempt-history .report-card").count(), 1);
+  assert.equal(await page.locator("#attempt-history #download-report").count(), 0);
+  assert.equal(await page.locator("#attempt-history #done").count(), 0);
+});
+
+lobbyTest("try again selects the problem", async (page) => {
+  reports = [savedAttempt(EASY[0])];
+  await lobby(page);
+  await page.getByRole("button", { name: "Try again" }).click();
+  assert.equal((await snapshot(page)).card, EASY[0]);
+  assert.match(await page.locator("#recommendation").textContent(), /Selected:/);
+});
+
+lobbyTest("an unmappable history entry fetches the page map at most once", async (page) => {
+  session = { signedIn: false };
+  const requests = [];
+  page.on("request", (request) => requests.push(new URL(request.url()).pathname));
+  await page.addInitScript(() => {
+    if (!localStorage.getItem("codetrial_history")) localStorage.setItem("codetrial_history", JSON.stringify([
+      { problemId: "retired-problem", date: "2026-01-01T00:00:00Z", report: { decision: "HIRE" } },
+    ]));
+  });
+  await lobby(page);
+  await lobby(page);
+  assert.equal(requests.filter((path) => path === "/problem-pages.json").length, 1);
 });
 
 lobbyTest("a due review below the suggested level is shown and recommended", async (page) => {

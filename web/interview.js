@@ -84,7 +84,7 @@ import {
   startRecording,
   withdrawRecordingConsent,
 } from "./recording-state.js";
-import { saveReportHistory } from "./history.js";
+import { assignedId as randomId, saveReportHistory } from "./history.js";
 import { createFacePresenceDetector, facePresenceVerdict } from "./face-presence.js";
 import { harnessGap, languagesFor } from "./compiler-explorer.js";
 import { runBrowserTests } from "./runners.js";
@@ -1448,10 +1448,6 @@ function addTranscript(speaker, text, final) {
 
 function updateTranscriptSegment(id, speaker, text, final) {
   state.transcript.upsert(id, speaker, text, final);
-}
-
-function randomId() {
-  return Math.random().toString(36).slice(2);
 }
 
 function flushPendingCodePublish() {

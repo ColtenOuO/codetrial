@@ -8,8 +8,11 @@ import { join } from "node:path";
 import {
   clearReportHistory,
   historyKey,
+  readDeviceHistory,
   readLocalHistory,
+  readReviewHistory,
   renameLocalHistory,
+  reviewHistoryKey,
   saveReportHistory,
 } from "../../web/history.js";
 import { functionBody, memoryStorage, root } from "./source.js";
@@ -39,7 +42,7 @@ test("lobby exposes signed in and signed out account hooks", () => {
   assert.match(script, /fetchJson\("\/api\/session"\)/);
   assert.match(script, /fetchJson\("\/api\/reports"\)/);
   assert.match(script, /fetch\("\/api\/logout", \{ method: "POST" \}\)/);
-  assert.match(script, /readLocalHistory\(\)/);
+  assert.match(script, /readDeviceHistory\(\)/);
   assert.match(script, /clearReportHistory\(\{ account: accountHistory \}\)/);
   assert.match(script, /setStartGate\(true\)/, "GitHub username must gate interview start when required");
 });
@@ -48,7 +51,10 @@ test("interview history routes through the shared persistence helper", () => {
   const script = read("interview.js");
   const saveHistory = functionBody(script, "saveHistory");
 
-  assert.match(script, /import \{ saveReportHistory \} from "\.\/history\.js"/);
+  // Named, not the whole import list: interview.js also takes the id generator
+  // from this module, and pinning the exact list made adding that a test
+  // failure about wiring the test does not care about.
+  assert.match(script, /import \{[^}]*\bsaveReportHistory\b[^}]*\} from "\.\/history\.js"/);
   assert.match(saveHistory, /return saveReportHistory\(entry\)/);
   for (const name of ["receiveReport", "showReport"]) {
     const body = functionBody(script, name);
@@ -218,6 +224,176 @@ test("report history writes local storage before account sync", async () => {
   assert.equal(posts.length, 1);
   assert.equal(posts[0].url, "/api/reports");
   assert.equal(posts[0].options.method, "POST");
+});
+
+test("review inputs survive the full-report cap", async () => {
+  const storage = memoryStorage();
+  for (let index = 0; index < 21; index += 1) {
+    await saveReportHistory({
+      problemId: `problem-${index}`,
+      date: `2026-01-${String(index + 1).padStart(2, "0")}T00:00:00Z`,
+      report: { decision: index === 0 ? "NO_HIRE" : "HIRE", incomplete: false, improvementPlan: [] },
+    }, { storage, fetcher: async () => response({ signedIn: false }) });
+  }
+  assert.equal(readLocalHistory(storage).length, 20);
+  const reviews = readReviewHistory(storage);
+  assert.equal(reviews.length, 21);
+  assert.equal(reviews.at(-1).problemId, "problem-0");
+  const { id, ...oldest } = reviews.at(-1);
+  assert.equal(typeof id, "string");
+  assert.deepEqual(oldest, {
+    problemId: "problem-0",
+    date: "2026-01-01T00:00:00Z",
+    report: { decision: "NO_HIRE", incomplete: false, improvementPlan: [] },
+  });
+});
+
+test("a rebuilt review history keeps the local-storage budget", () => {
+  const storage = memoryStorage();
+  storage.setItem(historyKey, JSON.stringify(Array.from({ length: 20 }, (_, index) => ({
+    problemId: `problem-${index}`,
+    report: { summary: "x".repeat(20_000) },
+  }))));
+  const reviews = readReviewHistory(storage);
+  assert.ok(reviews.length < 20, "oversized full reports cannot bypass the review budget");
+  assert.ok(new TextEncoder().encode(storage.getItem(reviewHistoryKey)).length <= 164 * 1024);
+});
+
+test("a rebuilt review history remains readable when storage is read-only", () => {
+  const entries = [{ id: "readable", problemId: "two-sum" }];
+  const storage = {
+    getItem: (key) => key === historyKey ? JSON.stringify(entries) : null,
+    setItem: () => { throw new Error("quota"); },
+  };
+  assert.deepEqual(readReviewHistory(storage), entries);
+});
+
+test("device history is empty when local storage access is forbidden", () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    get: () => { throw new Error("forbidden"); },
+  });
+  try {
+    assert.deepEqual(readDeviceHistory(), []);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "localStorage", previous);
+    else delete globalThis.localStorage;
+  }
+});
+
+test("the device history keeps what the review budget dropped, once", () => {
+  const storage = memoryStorage();
+  const entries = Array.from({ length: 20 }, (_, index) => ({
+    id: `attempt-${index}`,
+    problemId: `problem-${index}`,
+    report: { summary: "x".repeat(20_000) },
+  }));
+  storage.setItem(historyKey, JSON.stringify(entries));
+  assert.ok(readReviewHistory(storage).length < 20, "the budget has to drop some of these");
+  assert.deepEqual(readDeviceHistory(storage), entries);
+});
+
+test("legacy attempts receive distinct stable ids across both stores", () => {
+  const storage = memoryStorage();
+  const date = "2026-01-01T00:00:00Z";
+  const history = [
+    { problemId: "renamed-a", date, report: { decision: "HIRE" } },
+  ];
+  const reviews = [
+    { problemId: "published-a", date, report: { decision: "HIRE" } },
+    { problemId: "problem-b", date, report: { decision: "HIRE" } },
+  ];
+  storage.setItem(historyKey, JSON.stringify(history));
+  storage.setItem(reviewHistoryKey, JSON.stringify(reviews));
+
+  const merged = readDeviceHistory(storage);
+  const savedHistory = readLocalHistory(storage);
+  const savedReviews = readReviewHistory(storage);
+  assert.equal(merged.length, 2);
+  assert.notEqual(merged[0].id, merged[1].id, "same-date attempts share no identity");
+  assert.equal(savedHistory[0].id, savedReviews[0].id, "a partially renamed copy keeps one identity");
+  assert.notEqual(savedReviews[0].id, savedReviews[1].id);
+  assert.deepEqual(readDeviceHistory(storage), merged, "the assigned ids survive another read");
+});
+
+test("legacy id migration leaves a full review store intact", () => {
+  const budget = 164 * 1024;
+  const reviews = Array.from({ length: 30 }, (_, index) => ({
+    problemId: `problem-${index}`,
+    report: { summary: "" },
+  }));
+  const encoder = new TextEncoder();
+  const serialized = () => JSON.stringify(reviews);
+  reviews[0].report.summary = "x".repeat(budget - encoder.encode(serialized()).length - 1);
+
+  const memory = memoryStorage();
+  memory.setItem(historyKey, "[]");
+  const stored = serialized();
+  memory.setItem(reviewHistoryKey, stored);
+  let writes = 0;
+  const storage = {
+    getItem: (key) => memory.getItem(key),
+    setItem: (key, value) => {
+      if (key === reviewHistoryKey) writes += 1;
+      memory.setItem(key, value);
+    },
+  };
+
+  const migrated = readDeviceHistory(storage);
+  assert.equal(migrated.length, reviews.length);
+  assert.ok(migrated.every((entry) => typeof entry.id === "string"));
+  assert.equal(writes, 0, "migration does not rewrite an over-budget store");
+  assert.equal(memory.getItem(reviewHistoryKey), stored);
+});
+
+test("device history survives an origin without crypto.randomUUID", () => {
+  // `crypto.randomUUID` exists only in a secure context, so on an http:// origin
+  // it is undefined. Assigning ids to pre-id rows must not depend on it: the
+  // throw used to reach readDeviceHistory's catch, which answered with no
+  // history, and the next save then rebuilt the review store from nothing.
+  const storage = memoryStorage();
+  const rows = [{ problemId: "two-sum", date: "2026-01-01T00:00:00Z", report: { decision: "HIRE" } }];
+  storage.setItem(historyKey, JSON.stringify(rows));
+  storage.setItem(reviewHistoryKey, JSON.stringify(rows));
+
+  const original = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+  Object.defineProperty(globalThis, "crypto", { configurable: true, value: {} });
+  try {
+    const merged = readDeviceHistory(storage);
+    assert.equal(merged.length, 1, "the attempt is still reachable");
+    assert.equal(typeof merged[0].id, "string", "and it was given an id anyway");
+  } finally {
+    if (original) Object.defineProperty(globalThis, "crypto", original);
+    else delete globalThis.crypto;
+  }
+});
+
+test("a report the review store refuses is still saved on this device", async () => {
+  const memory = memoryStorage();
+  const storage = {
+    getItem: (key) => memory.getItem(key),
+    setItem: (key, value) => {
+      if (key === reviewHistoryKey) throw new Error("quota");
+      memory.setItem(key, value);
+    },
+  };
+  const saved = await saveReportHistory({ id: "only-local", problemId: "two-sum", report: { decision: "HIRE" } }, {
+    storage,
+    fetcher: async () => response({ signedIn: false }),
+  });
+  assert.equal(saved.local, "saved");
+  assert.deepEqual(readLocalHistory(memory).map((entry) => entry.id), ["only-local"]);
+});
+
+test("an oversized newest review does not erase older review history", async () => {
+  const storage = memoryStorage();
+  storage.setItem(reviewHistoryKey, JSON.stringify([{ problemId: "kept", report: { decision: "HIRE" } }]));
+  await saveReportHistory({
+    problemId: "too-large",
+    report: { summary: "x".repeat(200_000) },
+  }, { storage, fetcher: async () => response({ signedIn: false }) });
+  assert.deepEqual(readReviewHistory(storage).map((entry) => entry.problemId), ["kept"]);
 });
 
 test("report history keeps anonymous and failed account saves local", async () => {
@@ -431,6 +607,26 @@ test("history saved under published ids is renamed to page names once", () => {
   const counting = { ...unchanged, getItem: (key) => unchanged.getItem(key), setItem: (...args) => { writes += 1; unchanged.setItem(...args); } };
   renameLocalHistory(pages, counting);
   assert.equal(writes, 0, "nothing to rename is nothing written");
+});
+
+// The review list is built from the history the first time it is read, so an
+// interview saved before any lobby visit copies the published ids into it. The
+// rename has to reach that copy too, or those reviews match no card.
+test("a review list built before the rename is renamed with the history", async () => {
+  const storage = memoryStorage();
+  const pages = { "two-sum": { page: "some-scenario" } };
+  storage.setItem(historyKey, JSON.stringify([{ problemId: "two-sum", date: "2026-01-01" }]));
+  const offline = async () => ({ ok: false, status: 401, json: async () => ({}) });
+  await saveReportHistory({ problemId: "some-scenario", date: "2026-02-01", report: {} }, { fetcher: offline, storage });
+  assert.deepEqual(readReviewHistory(storage).map((entry) => entry.problemId), ["some-scenario", "two-sum"]);
+
+  storage.setItem(reviewHistoryKey, JSON.stringify([...readReviewHistory(storage), { problemId: "retired" }]));
+  renameLocalHistory(pages, storage, true);
+  assert.deepEqual(
+    readReviewHistory(storage).map((entry) => [entry.problemId, entry.pageMapChecked ?? false]),
+    [["some-scenario", true], ["some-scenario", false], ["retired", true]],
+    "published ids renamed, and ids the map does not key are marked so the lobby stops asking",
+  );
 });
 
 test("a stored history that is not a list reads as no history", () => {

@@ -1,4 +1,11 @@
 export const historyKey = "codetrial_history";
+export const reviewHistoryKey = "codetrial_review_history";
+
+// Full reports are what lets an older attempt reopen after the short history
+// rolls over. Keep as many as fit in this budget, up to 500, rather than
+// pretending every report has the same small serialized size.
+const REVIEW_HISTORY_CAP = 500;
+const REVIEW_HISTORY_BYTES = 164 * 1024;
 
 /// Every request here is a small same-origin call, and every one of them is
 /// awaited by something the candidate is looking at: a stalled save leaves the
@@ -13,37 +20,200 @@ const requestTimeoutMs = 10_000;
 /// already answered with an empty list, but parseable JSON that is not one went
 /// straight through to callers that all treat it as an array.
 export function readLocalHistory(storage) {
+  return storedList(historyKey, storage) ?? [];
+}
+
+/// The list a store holds, or null when it holds anything else.
+///
+/// Null rather than an empty list because two callers have to tell "no list
+/// stored yet" from "a list that is empty": one rebuilds the review store in
+/// that case and one declines to rewrite a store that is not there. The rest
+/// fold both into an empty list at the call.
+///
+/// No fallback for a missing key: `JSON.parse(null)` answers null, which is
+/// not a list, and the shape check already turns that into one.
+function storedList(key, storage) {
+  try {
+    const stored = JSON.parse((storage || localStorage).getItem(key));
+    return Array.isArray(stored) ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readReviewHistory(storage) {
   try {
     storage ||= localStorage;
-    // No fallback for a missing key: `JSON.parse(null)` answers null, which is
-    // not a list, and the shape check below already turns that into one.
-    const stored = JSON.parse(storage.getItem(historyKey));
-    return Array.isArray(stored) ? stored : [];
+    const stored = storedList(reviewHistoryKey, storage);
+    if (stored) return stored;
+    const { retained, json } = boundedReviews(readLocalHistory(storage));
+    try {
+      storage.setItem(reviewHistoryKey, json);
+    } catch { /* the readable history still belongs on screen */ }
+    return retained;
   } catch {
     return [];
   }
+}
+
+/// Everything this device has, newest first.
+///
+/// Two stores, one answer, because neither is a superset of the other. The
+/// short history keeps the 20 newest attempts whatever they weigh, while
+/// `boundedReviews` skips a report too large for the byte budget, so an attempt
+/// the lobby can still reopen was missing from the review store and the panel
+/// drawn from it alone. The review store extends the 20 with the older attempts
+/// the history has rolled past, and those are all older than anything in it, so
+/// the two concatenate newest first without a sort.
+///
+/// The history is taken whole and only the review store is filtered against it.
+/// Two attempts that serialize alike are still two attempts, and a rule that
+/// deduplicated within a store quietly merged them.
+export function readDeviceHistory(storage) {
+  try {
+    storage ||= localStorage;
+    const history = readLocalHistory(storage);
+    const reviews = readReviewHistory(storage);
+    // Mutates both arrays, and writes both stores when it has anything to say.
+    migrateLegacyIds(history, reviews, storage);
+    const shown = new Set(history.map((entry) => entry?.id).filter((id) => id != null));
+    // `shown` never holds a nullish id, so a row without one is kept by the miss.
+    return [...history, ...reviews.filter((entry) => !shown.has(entry?.id))];
+  } catch {
+    return [];
+  }
+}
+
+/// Give pre-id attempts one durable identity in both stores before merging.
+/// `problemId` and `pageMapChecked` are excluded only while pairing the copies:
+/// a refused second rename write may have changed those fields in one store.
+function migrateLegacyIds(history, reviews, storage) {
+  // Every report this app has saved carries an id, so the usual answer is that
+  // there is nothing to pair. Decide that from the rows themselves, before
+  // building a content key for each one and walking one store against the
+  // other: serializing a full review store to answer "no" costs more than the
+  // read it is part of.
+  const unidentified = (entry) => pairable(entry) && entry.id == null;
+  const historyChanged = history.some(unidentified);
+  const reviewsChanged = reviews.some(unidentified);
+  if (!historyChanged && !reviewsChanged) return;
+
+  // One history row pairs with one review row, so a matched candidate is
+  // withdrawn rather than left to match a second time.
+  const candidates = history
+    .filter(pairable)
+    .map((entry) => ({ entry, key: legacyKey(entry), used: false }));
+  for (const review of reviews) {
+    if (!pairable(review)) continue;
+    const key = legacyKey(review);
+    const match = candidates.find((candidate) => !candidate.used && candidate.key === key);
+    const id = match?.entry.id ?? review.id ?? assignedId();
+    if (match) {
+      match.used = true;
+      match.entry.id ??= id;
+    }
+    review.id ??= id;
+  }
+  for (const { entry } of candidates) entry.id ??= assignedId();
+
+  if (historyChanged) {
+    try {
+      storage.setItem(historyKey, JSON.stringify(history));
+    } catch { /* the ids still apply to this read */ }
+  }
+  if (reviewsChanged) {
+    try {
+      const serialized = JSON.stringify(reviews);
+      if (reviews.length <= REVIEW_HISTORY_CAP
+        && new TextEncoder().encode(serialized).length <= REVIEW_HISTORY_BYTES) {
+        storage.setItem(reviewHistoryKey, serialized);
+      }
+    } catch { /* the ids still apply to this read */ }
+  }
+}
+
+/// An id for a row that predates them, in the shape `randomId` in interview.js
+/// gives every report saved since.
+///
+/// Not `crypto.randomUUID`: it exists only in a secure context, so on an
+/// http:// origin it is undefined and calling it throws. That throw reached
+/// `readDeviceHistory`'s catch, which answered with no history at all, and the
+/// next save then wrote a store built from nothing. Losing a candidate's
+/// attempts because the page was served over plain HTTP is a far worse trade
+/// than the collision odds this gives up, which over tens of rows are nil.
+export function assignedId() {
+  return Math.random().toString(36).slice(2);
+}
+
+/// Whether a stored row is a record this can pair at all. Both stores are
+/// parsed from text anyone with devtools can edit, so a row may be anything.
+function pairable(entry) {
+  return entry != null && typeof entry === "object" && !Array.isArray(entry);
+}
+
+/// What two copies of one attempt have in common. `problemId` and
+/// `pageMapChecked` are excluded because `renameLocalHistory` writes its two
+/// stores through separate calls, so a refused second write leaves exactly
+/// those two fields disagreeing between the copies.
+function legacyKey(entry) {
+  // Copied field by field rather than spread-then-deleted: a `delete` drops the
+  // copy into dictionary mode and the stringify that follows it pays for that,
+  // which is most of what this function used to cost. The target has a null
+  // prototype so a stored `__proto__` stays an ordinary field of the key
+  // instead of silently becoming the object's prototype and vanishing from it.
+  const stable = Object.create(null);
+  for (const field of Object.keys(entry)) {
+    if (field === "id" || field === "problemId" || field === "pageMapChecked") continue;
+    stable[field] = entry[field];
+  }
+  return JSON.stringify(stable);
 }
 
 /// History saved before problems had page names carries published ids, and a
 /// lobby translating them fetches the page map on every visit. Rewritten once
 /// here, the next visit finds page names and fetches nothing. `pages` is that
 /// map; entries it does not name are left as they are.
-export function renameLocalHistory(pages, storage) {
+///
+/// Both local stores, by one rule. The review list is read against page names
+/// too, and an interview saved before the first lobby visit builds it from the
+/// unrenamed history, so renaming only the history left those reviews matching
+/// no card. Only an existing review list is rewritten: a missing one is built
+/// from the history when it is first read, after this has run.
+export function renameLocalHistory(pages, storage, markUnmapped = false) {
   try {
     storage ||= localStorage;
-    const entries = readLocalHistory(storage);
-    let renamed = false;
-    const next = entries.map((entry) => {
-      const id = entry?.problemId;
-      if (typeof id !== "string" || !Object.hasOwn(pages, id)) return entry;
-      renamed = true;
-      return { ...entry, problemId: pages[id].page };
-    });
-    if (renamed) storage.setItem(historyKey, JSON.stringify(next));
-    return next;
+    const history = renamedEntries(readLocalHistory(storage), pages, markUnmapped);
+    if (history.renamed) storage.setItem(historyKey, JSON.stringify(history.next));
+    const stored = storedList(reviewHistoryKey, storage);
+    if (stored) {
+      const reviews = renamedEntries(stored, pages, markUnmapped);
+      // Bounded on the way back out. A page name is not the same length as the
+      // published id it replaces, so a rename can push a store that was inside
+      // the budget past it, and the write that finally fails is a later save
+      // rather than this one.
+      if (reviews.renamed) {
+        storage.setItem(reviewHistoryKey, boundedReviews(reviews.next).json);
+      }
+    }
+    return history.next;
   } catch {
     return readLocalHistory(storage);
   }
+}
+
+function renamedEntries(entries, pages, markUnmapped) {
+  let renamed = false;
+  const next = entries.map((entry) => {
+    const id = entry?.problemId;
+    if (typeof id !== "string" || !Object.hasOwn(pages, id)) {
+      if (!markUnmapped || typeof id !== "string" || entry?.pageMapChecked === true) return entry;
+      renamed = true;
+      return { ...entry, pageMapChecked: true };
+    }
+    renamed = true;
+    return { ...entry, problemId: pages[id].page };
+  });
+  return { next, renamed };
 }
 
 export async function saveReportHistory(entry, { fetcher = fetch, storage } = {}) {
@@ -75,6 +245,7 @@ export async function clearReportHistory({ account = false, fetcher = fetch, sto
     try {
       storage ||= localStorage;
       storage.removeItem(historyKey);
+      storage.removeItem(reviewHistoryKey);
       return "cleared";
     } catch {
       return session === "in" ? "account-cleared-local-failed" : "failed";
@@ -88,11 +259,52 @@ function saveLocalReport(entry, storage) {
   try {
     storage ||= localStorage;
     const previous = readLocalHistory(storage);
+    // The short history first, and before the review store is even read.
+    // Reading it can rebuild it, and that write is the 164 KB one: spending the
+    // remaining quota on it here refused the save of a report the device had
+    // room for, and the candidate was told it was gone.
     storage.setItem(historyKey, JSON.stringify([entry, ...previous].slice(0, 20)));
+    // The short history is what the lobby draws this report from, so a review
+    // store that refuses the write costs the reopen twenty attempts from now,
+    // not this save. Reporting "Report was not saved" for it told the candidate
+    // their report was gone while it sat in the panel behind them.
+    //
+    // Rebuilt from the merged view rather than from the review store alone, so
+    // an attempt whose own review write was refused goes back in the next time
+    // one lands, instead of being lost the moment it rolls past the twenty.
+    try {
+      storage.setItem(reviewHistoryKey, boundedReviews(readDeviceHistory(storage)).json);
+    } catch { /* the report is on this device either way */ }
     return "saved";
   } catch {
     return "failed";
   }
+}
+
+// One report at a time against a running total, rather than re-serializing
+// everything retained so far on each step: that measured the same 164 KB five
+// hundred times over on a single save. A review too large for what is left is
+// skipped and the walk carries on, so one outsized report costs itself and not
+// the older attempts behind it.
+function boundedReviews(reviews) {
+  const encoder = new TextEncoder();
+  const retained = [];
+  const texts = [];
+  // The brackets the array itself serializes to, before any element.
+  let bytes = 2;
+  for (const review of reviews.slice(0, REVIEW_HISTORY_CAP)) {
+    const text = JSON.stringify(review);
+    // A separator for every element after the first.
+    const size = encoder.encode(text).length + (retained.length ? 1 : 0);
+    if (bytes + size > REVIEW_HISTORY_BYTES) continue;
+    bytes += size;
+    retained.push(review);
+    texts.push(text);
+  }
+  // The text as well as the rows. Measuring already serialized every retained
+  // report, so a caller that writes `JSON.stringify(retained)` serializes all
+  // five hundred of them a second time for the same string.
+  return { retained, json: `[${texts.join(",")}]` };
 }
 
 async function saveAccountReport(entry, fetcher) {
