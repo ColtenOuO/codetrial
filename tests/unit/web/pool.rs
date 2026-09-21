@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::config::{PRIMARY_PROVIDER_ID, Provider, provider_id_from_room};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The LiveKit credentials every project in `config_with` is built from,
 /// and the pair [`quota_stub`] verifies the probe's token against. Named
@@ -50,7 +51,7 @@ fn config_with(ids: &[&str]) -> WebServerConfig {
 /// bearer JWT naming this project as its issuer and signed with this
 /// project's secret.
 ///
-/// Read backwards from what `probe_not_exhausted` mints, and deliberately
+/// Read backwards from what `probe_verdict` mints, and deliberately
 /// through the crate's own verifier rather than a second copy of it, so a
 /// change to the signing that this file does not follow shows up as a
 /// refusal here instead of passing unnoticed.
@@ -90,7 +91,9 @@ fn probe_credential_accepted(
 
 /// A stub that answers one status to a probe carrying this project's
 /// credential, standing in for a LiveKit project with or without minutes
-/// left, and 401 to anything else.
+/// left, and 401 to anything else. The returned counter says how many times
+/// the project was asked, for the tests whose claim is about that rather than
+/// about what it answered.
 ///
 /// The credential check is the difference between a test that exercises the
 /// probe and one that only exercises its URL. `/rtc/validate` is an
@@ -99,43 +102,65 @@ fn probe_credential_accepted(
 /// status to any caller would let the probe drop `.bearer_auth`, sign with
 /// the wrong project's secret, or mint a token for a project it is not
 /// asking about, and every test here would still pass -- while production
-/// learned nothing about quota, because 401 is not 429 and this module
-/// reads everything that is not 429 as "still has minutes". That is the
-/// same shape as the GitHub stub that answered one profile to any bearer
-/// token, which let a broken token exchange pass the whole suite.
+/// learned nothing about quota, because the old module read every non-429 as
+/// "still has minutes". That is the same shape as the GitHub stub that
+/// answered one profile to any bearer token, which let a broken token
+/// exchange pass the whole suite.
 ///
 /// A pool is more than one project, so the check is against this project's
 /// key and secret rather than merely against a well-formed token: probing
 /// project B with project A's credential is a failure only a per-project
 /// check can see, and it is the failure a rotation over several projects is
 /// most able to make.
-async fn quota_stub(status: axum::http::StatusCode) -> (String, tokio::task::JoinHandle<()>) {
+///
+/// [`quota_stub`] is this without the counter. Written once so the credential
+/// tripwire above cannot hold in one stub and quietly lapse in the other.
+async fn counting_quota_stub(
+    status: axum::http::StatusCode,
+) -> (
+    String,
+    std::sync::Arc<AtomicUsize>,
+    tokio::task::JoinHandle<()>,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
+    let probes = std::sync::Arc::new(AtomicUsize::new(0));
+    let counted = probes.clone();
     let app = axum::Router::new().route(
         "/rtc/validate",
-        axum::routing::get(move |headers: axum::http::HeaderMap| async move {
-            if !probe_credential_accepted(&headers, STUB_API_KEY, STUB_API_SECRET) {
-                return axum::http::StatusCode::UNAUTHORIZED;
+        axum::routing::get(move |headers: axum::http::HeaderMap| {
+            let counted = counted.clone();
+            async move {
+                counted.fetch_add(1, Ordering::Relaxed);
+                if !probe_credential_accepted(&headers, STUB_API_KEY, STUB_API_SECRET) {
+                    return axum::http::StatusCode::UNAUTHORIZED;
+                }
+                status
             }
-            status
         }),
     );
     let server = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
-    (format!("ws://127.0.0.1:{port}"), server)
+    (format!("ws://127.0.0.1:{port}"), probes, server)
+}
+
+/// [`counting_quota_stub`] for the tests that do not count probes.
+async fn quota_stub(status: axum::http::StatusCode) -> (String, tokio::task::JoinHandle<()>) {
+    let (url, _probes, server) = counting_quota_stub(status).await;
+    (url, server)
 }
 
 /// `refresh_all` decides which projects the rotation may still use, so
-/// returning the wrong set is the difference between routing around a spent
-/// project and routing into it. Dropping the negation reported exactly the
-/// projects that still had minutes, and nothing noticed.
+/// returning the wrong verdict is the difference between routing around an
+/// unavailable project and routing into it. Dropping the negation reported
+/// exactly the projects that still had minutes, and nothing noticed.
 /// The credential check on the quota stub is a tripwire, and this is what
 /// proves the wire is live.
 ///
 /// The only other caller reads the stub's answer through `refresh_all`,
-/// which reads everything that is not 429 as "still has minutes" -- so a
+/// which previously read everything that was not 429 as "still has minutes" --
+/// so a
 /// stub that quietly stopped checking would go on passing there: the probe
 /// would arrive with no credential, be refused, and the refusal would read
 /// as a healthy project. Asking the stub directly is the only place the
@@ -145,7 +170,7 @@ async fn quota_stub(status: axum::http::StatusCode) -> (String, tokio::task::Joi
 #[tokio::test]
 async fn the_quota_stub_refuses_a_probe_that_carries_the_wrong_credential() {
     /// The credential the probe mints, so the test asks with what
-    /// `probe_not_exhausted` asks with rather than with a token shaped
+    /// `probe_verdict` asks with rather than with a token shaped
     /// like it.
     fn probe_token(api_key: &str, api_secret: &str) -> String {
         crate::token::livekit_token(crate::token::LivekitTokenInput {
@@ -214,7 +239,7 @@ async fn the_quota_stub_refuses_a_probe_that_carries_the_wrong_credential() {
 }
 
 #[tokio::test]
-async fn refresh_all_names_the_projects_that_refused() {
+async fn refresh_all_preserves_each_project_verdict() {
     let (spent_url, spent_server) = quota_stub(axum::http::StatusCode::TOO_MANY_REQUESTS).await;
     let (healthy_url, healthy_server) = quota_stub(axum::http::StatusCode::OK).await;
 
@@ -222,20 +247,125 @@ async fn refresh_all_names_the_projects_that_refused() {
     config.pool.providers[0].url = spent_url;
     config.pool.providers[1].url = healthy_url;
 
-    let quota = ProviderQuota::default();
+    let quota = ProviderQuota::new(true);
     assert_eq!(
         quota.refresh_all(&config.pool).await,
-        vec!["spent".to_string()],
-        "only the project that answered 429 is out"
+        vec![
+            ("spent".to_string(), ProviderVerdict::OutOfMinutes),
+            ("healthy".to_string(), ProviderVerdict::Available),
+        ],
+        "every cached verdict remains distinguishable"
     );
 
     // And the verdicts landed in the cache the request path reads, so a token
     // request pays no probe of its own.
-    assert!(!quota.not_known_exhausted(&config.pool.providers[0]).await);
-    assert!(quota.not_known_exhausted(&config.pool.providers[1]).await);
+    assert_eq!(
+        quota.verdict_for(&config.pool.providers[0]).await,
+        ProviderVerdict::OutOfMinutes
+    );
+    assert_eq!(
+        quota.verdict_for(&config.pool.providers[1]).await,
+        ProviderVerdict::Available
+    );
 
     spent_server.abort();
     healthy_server.abort();
+}
+
+#[tokio::test]
+async fn a_project_refusing_the_probe_credential_is_excluded() {
+    let (url, probes, server) = counting_quota_stub(axum::http::StatusCode::OK).await;
+    let (healthy_url, healthy_server) = quota_stub(axum::http::StatusCode::OK).await;
+    let mut config = config_with(&["refused", "healthy"]);
+    config.pool.providers[0].url = url;
+    config.pool.providers[0].api_secret = "rotated-secret".to_string();
+    config.pool.providers[1].url = healthy_url;
+
+    let quota = ProviderQuota::new(true);
+    assert_eq!(
+        quota.verdict_for(&config.pool.providers[0]).await,
+        ProviderVerdict::CredentialRefused(axum::http::StatusCode::UNAUTHORIZED),
+        "a 401 is a refusal, not an availability"
+    );
+    assert_eq!(
+        probes.load(Ordering::Relaxed),
+        1,
+        "the first verdict is probed"
+    );
+
+    // The second lookup is the claim: counting the probes is what tells a
+    // cached refusal apart from a fresh one, because a stub that answers 401
+    // every time answers both the same way.
+    assert_eq!(
+        quota.verdict_for(&config.pool.providers[0]).await,
+        ProviderVerdict::CredentialRefused(axum::http::StatusCode::UNAUTHORIZED),
+        "a refusal still inside its cache window is not re-probed"
+    );
+    assert_eq!(
+        probes.load(Ordering::Relaxed),
+        1,
+        "the second lookup asked the cache, not the project"
+    );
+
+    // And excluded, which is the word in this test's name and a stronger claim
+    // than the verdict above. The rotation reaches for whatever is still
+    // available, so what matters is that the refused project is the only one
+    // missing from that set while a healthy project beside it stays in. A
+    // second cache, because the one above is warm and this asks what a cold
+    // pool decides.
+    let rotation = ProviderQuota::new(true);
+    assert_eq!(
+        unavailable_projects(&rotation.refresh_all(&config.pool).await),
+        vec!["refused: credential refused (401)".to_string()],
+        "the refused project leaves the rotation and the healthy one does not"
+    );
+
+    server.abort();
+    healthy_server.abort();
+}
+
+#[tokio::test]
+async fn a_forbidden_probe_credential_is_excluded() {
+    let (url, server) = quota_stub(axum::http::StatusCode::FORBIDDEN).await;
+    let mut config = config_with(&["forbidden"]);
+    config.pool.providers[0].url = url;
+
+    let quota = ProviderQuota::new(true);
+    assert_eq!(
+        quota.verdict_for(&config.pool.providers[0]).await,
+        ProviderVerdict::CredentialRefused(axum::http::StatusCode::FORBIDDEN),
+        "the 403 must keep this project out of rotation"
+    );
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_refused_project_returns_after_the_cache_ttl() {
+    let (url, server) = quota_stub(axum::http::StatusCode::OK).await;
+    let mut config = config_with(&["refused"]);
+    config.pool.providers[0].url = url;
+    config.pool.providers[0].api_secret = "rotated-secret".to_string();
+    let quota = ProviderQuota::new(true);
+
+    assert!(matches!(
+        quota.verdict_for(&config.pool.providers[0]).await,
+        ProviderVerdict::CredentialRefused(_)
+    ));
+    config.pool.providers[0].api_secret = STUB_API_SECRET.to_string();
+
+    assert_eq!(
+        quota
+            .verdict_for_at(
+                &config.pool.providers[0],
+                Instant::now() + PROVIDER_QUOTA_TTL,
+            )
+            .await,
+        ProviderVerdict::Available,
+        "the first stale read must re-probe with the repaired credential"
+    );
+
+    server.abort();
 }
 
 /// The relation the refresher depends on, asserted rather than described.
@@ -273,35 +403,43 @@ fn a_verdict_is_stale_the_instant_it_reaches_the_ttl() {
     assert!(!is_fresh(PROVIDER_QUOTA_TTL + Duration::from_secs(1)));
 }
 
-/// The three arms an operator reads. Each one is a different instruction:
-/// nothing to do, top one account up, or every interview is about to be
-/// refused. Before these were strings the arms only printed, so a mutant
-/// could collapse all three into one and no test could tell.
+/// The operator needs the unavailable cause, because topping up a project
+/// cannot repair a credential refusal. Before these were strings the arms only
+/// printed, so a mutant could collapse them and no test could tell.
 #[test]
-fn the_startup_line_says_which_of_the_three_situations_this_is() {
+fn pool_health_lines_name_exhausted_and_refused_projects() {
     assert_eq!(
         pool_health_line(&[], 9),
         "livekit quota: all 9 project(s) can take connections"
     );
     assert_eq!(
-        pool_health_line(&["primary".to_string()], 9),
-        "livekit quota: 8 of 9 project(s) available; out of minutes: primary"
+        pool_health_line(&[("primary".to_string(), ProviderVerdict::OutOfMinutes)], 9),
+        "livekit quota: 8 of 9 project(s) available; unavailable: primary: out of connection minutes"
     );
-
-    // All of them, which is the one an operator has to act on immediately. The
-    // count and the names both matter, so a guard that fired on the wrong
-    // comparison would be reporting the wrong emergency.
     assert_eq!(
-        pool_health_line(&["a".to_string(), "b".to_string()], 2),
-        "livekit quota: every project is out of connection minutes (a, b); \
-         interviews will be refused until one is topped up"
+        pool_health_line(
+            &[(
+                "refused".to_string(),
+                ProviderVerdict::CredentialRefused(axum::http::StatusCode::FORBIDDEN),
+            )],
+            1,
+        ),
+        "livekit quota: every project is unavailable (refused: credential refused (403)); \
+         interviews will be refused until one recovers"
     );
-
-    // One project, and it is spent: still the every-project case.
     assert_eq!(
-        pool_health_line(&["only".to_string()], 1),
-        "livekit quota: every project is out of connection minutes (only); \
-         interviews will be refused until one is topped up"
+        pool_health_line(
+            &[
+                ("spent".to_string(), ProviderVerdict::OutOfMinutes),
+                (
+                    "refused".to_string(),
+                    ProviderVerdict::CredentialRefused(axum::http::StatusCode::FORBIDDEN),
+                ),
+            ],
+            2,
+        ),
+        "livekit quota: every project is unavailable (spent: out of connection minutes, refused: credential refused (403)); \
+         interviews will be refused until one recovers"
     );
 }
 
@@ -309,13 +447,17 @@ fn the_startup_line_says_which_of_the_three_situations_this_is() {
 /// whole decision.
 #[test]
 fn a_verdict_that_did_not_move_prints_nothing() {
-    let spent = vec!["primary".to_string()];
+    let spent = vec![("primary".to_string(), ProviderVerdict::OutOfMinutes)];
+    let refused = vec![(
+        "primary".to_string(),
+        ProviderVerdict::CredentialRefused(axum::http::StatusCode::UNAUTHORIZED),
+    )];
     assert_eq!(quota_change_line(&spent, &spent), None, "nothing moved");
     assert_eq!(quota_change_line(&[], &[]), None, "still all healthy");
 
     assert_eq!(
         quota_change_line(&[], &spent).as_deref(),
-        Some("livekit quota: now out of minutes: primary")
+        Some("livekit quota: now unavailable: primary: out of connection minutes")
     );
     assert_eq!(
         quota_change_line(&spent, &[]).as_deref(),
@@ -323,9 +465,9 @@ fn a_verdict_that_did_not_move_prints_nothing() {
         "recovery is the line an operator is waiting for"
     );
     assert_eq!(
-        quota_change_line(&spent, &["other".to_string()]).as_deref(),
-        Some("livekit quota: now out of minutes: other"),
-        "a different project going spent is a change, not a repeat"
+        quota_change_line(&spent, &refused).as_deref(),
+        Some("livekit quota: now unavailable: primary: credential refused (401)"),
+        "a refused credential is a change even when the provider id is the same"
     );
 }
 
@@ -354,6 +496,22 @@ async fn dropping_the_refresher_aborts_the_task_it_owns() {
         tokio::task::yield_now().await;
     }
     panic!("the task outlived the QuotaRefresher that owned it");
+}
+
+/// A disabled probe and an empty pool are separate reasons not to spawn the
+/// refresher. Combining them with `&&` starts a task for either disabled
+/// configuration, even though there is no useful work for that task to do.
+#[tokio::test]
+async fn a_refresher_starts_only_for_an_enabled_nonempty_pool() {
+    let disabled =
+        spawn_provider_quota_refresher(ProviderQuota::new(false), config_with(&["a"]).pool);
+    assert!(
+        disabled.0.is_none(),
+        "disabled quota probing starts no task"
+    );
+
+    let empty = spawn_provider_quota_refresher(ProviderQuota::new(true), config_with(&[]).pool);
+    assert!(empty.0.is_none(), "an empty pool starts no task");
 }
 
 /// The room name is a contract between two modules that never call each
@@ -402,4 +560,39 @@ fn every_room_name_this_mints_parses_back_to_the_provider_it_named() {
             );
         }
     }
+}
+
+/// The pool's code comes from its worst verdict, whichever order the projects
+/// are listed in. Both orders are asserted because `max_by_key` keeps the last
+/// of equal keys, so a ranking that stopped distinguishing the verdicts would
+/// still pass whenever the right one happened to come last.
+#[test]
+fn the_worst_verdict_speaks_for_the_pool_in_any_order() {
+    let refused = ProviderVerdict::CredentialRefused(axum::http::StatusCode::UNAUTHORIZED);
+    for verdicts in [
+        [refused, ProviderVerdict::OutOfMinutes],
+        [ProviderVerdict::OutOfMinutes, refused],
+    ] {
+        assert_eq!(ProviderVerdict::worst(verdicts), refused, "{verdicts:?}");
+        assert_eq!(
+            ProviderVerdict::worst(verdicts).code(),
+            "livekit_provider_credential_refused"
+        );
+    }
+    for verdicts in [
+        [ProviderVerdict::OutOfMinutes, ProviderVerdict::Available],
+        [ProviderVerdict::Available, ProviderVerdict::OutOfMinutes],
+    ] {
+        assert_eq!(
+            ProviderVerdict::worst(verdicts),
+            ProviderVerdict::OutOfMinutes,
+            "{verdicts:?}"
+        );
+    }
+    // No verdict at all is the pool the rotation found nothing in.
+    assert_eq!(
+        ProviderVerdict::worst([]),
+        ProviderVerdict::OutOfMinutes,
+        "an empty pool reports the quota code it always did"
+    );
 }
