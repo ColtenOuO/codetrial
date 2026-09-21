@@ -217,13 +217,24 @@ export function endInterviewPayload(reason, code, language) {
   return { type: "end_interview", reason, code, language };
 }
 
+/// The interview page bounds what a candidate may add and this bounds what
+/// reaches the agent, so the two read the same number. `MAX_CANDIDATE_CASES`
+/// in src/agent.rs is a third copy that nothing on the wire ties to this one,
+/// so both are pinned by feeding six cases in and counting what comes out: the
+/// wire fixture for this side, since a cap no fixture input reaches is a cap
+/// `--check` cannot see move, and `test_summary_lists_the_candidates_cases`
+/// for the Rust side, rendering a run the sanitizer never saw so the prompt is
+/// held to its own copy rather than inheriting the sanitizer's.
+export const CANDIDATE_CASE_LIMIT = 5;
+
 export function testPayload(summary) {
   return {
     passed: summary.passed,
     total: summary.total,
     language: summary.language,
     setupError: summary.setupError || null,
-    failures: summary.cases.filter((item) => !item.pass).slice(0, 4).map((item) => ({ label: item.label, expected: item.expected, got: item.got, error: item.error || null })),
+    failures: summary.cases.filter((item) => !item.candidate && !item.pass).slice(0, 4).map((item) => ({ label: item.label, expected: item.expected, got: item.got, error: item.error || null })),
+    candidateCases: summary.cases.filter((item) => item.candidate).slice(0, CANDIDATE_CASE_LIMIT).map((item) => ({ label: item.label, expected: item.expected ?? null, got: item.got, error: item.error || null })),
     at: Date.now(),
   };
 }
@@ -410,9 +421,9 @@ const textEncoder = new TextEncoder();
 /// function-local, moving it left the whole suite green with the supported-card
 /// branch no longer rendering, which is the defect a local constant invites.
 export const ACTIVE_CONTRACT = {
-  bundleVersion: 7,
+  bundleVersion: 8,
   livePromptVersion: 3,
-  reportPromptVersion: 5,
+  reportPromptVersion: 6,
   reportSchemaVersion: 2,
   rubricVersion: 1,
 };

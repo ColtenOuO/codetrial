@@ -117,6 +117,29 @@ function testResultsCases() {
         }),
       },
       {
+        // Six candidate cases against a cap of five, for the reason the
+        // failures above give: an empty `candidateCases` in the fixture let
+        // `CANDIDATE_CASE_LIMIT` move without `--check` seeing it, and the
+        // Rust copy of the same number is pinned separately in tests/agent.rs.
+        name: "more candidate cases than the payload carries",
+        payload: lib.testPayload({
+          passed: 1,
+          total: 1,
+          language: "python",
+          setupError: null,
+          cases: [
+            { label: "example 1", pass: true, expected: "[0,1]", got: "[0,1]", timeMs: 1 },
+            ...Array.from({ length: lib.CANDIDATE_CASE_LIMIT + 1 }, (_, offset) => offset + 1).map((index) => ({
+              label: `Your case ${index}`,
+              candidate: true,
+              pass: null,
+              got: `[${index}]`,
+              timeMs: index,
+            })),
+          ],
+        }),
+      },
+      {
         name: "setup error",
         payload: lib.testPayload({
           passed: 0,

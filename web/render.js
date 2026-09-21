@@ -27,18 +27,31 @@ export function resultsMarkup(summary, status = null) {
       body: `${statusMarkup}<p class="critical small"><strong>Couldn't run your code</strong></p><pre>${escapeHtml(summary.setupError)}</pre>`,
     };
   }
-  const cases = summary.cases.map((item) => `
+  const caseMarkup = (item) => {
+    // `pass === null` is a candidate case with no expectation, so it is an
+    // output to read rather than a result to judge. Named once: the three
+    // places that used to re-derive it had to agree on what null meant.
+    const observed = item.pass === null;
+    // Only a case that did not pass shows it, and most cases pass.
+    const detail = item.pass ? "" : item.error ? escapeHtml(item.error)
+      : observed ? `got ${escapeHtml(item.got)}`
+        : `expected ${escapeHtml(item.expected)}\ngot ${escapeHtml(item.got)}`;
+    return `
       <li>
-        <div><span class="${item.pass ? "good" : "critical"}">${item.pass ? "OK" : "FAIL"}</span> ${escapeHtml(item.label)} <span>${escapeHtml(item.timeMs)}ms</span></div>
-        ${item.pass ? "" : `<pre>${item.error ? escapeHtml(item.error) : `expected ${escapeHtml(item.expected)}\ngot ${escapeHtml(item.got)}`}</pre>`}
+        <div><span class="${observed || item.pass ? "good" : "critical"}">${observed ? "OUTPUT" : item.pass ? "OK" : "FAIL"}</span> ${escapeHtml(item.label)} <span>${escapeHtml(item.timeMs)}ms</span></div>
+        ${item.pass ? "" : `<pre>${detail}</pre>`}
       </li>
-    `).join("");
+    `;
+  };
+  const judgeCases = summary.cases.filter((item) => !item.candidate).map(caseMarkup).join("");
+  const candidateCases = summary.cases.filter((item) => item.candidate).map(caseMarkup).join("");
   return {
     label: `Test results · ${summary.passed}/${summary.total}`,
     body: `
     ${statusMarkup}
     <p class="${summary.passed === summary.total ? "good" : "critical"} small"><strong>${summary.passed}/${summary.total} test cases passed</strong></p>
-    <ul class="result-list">${cases}</ul>
+    <ul class="result-list">${judgeCases}</ul>
+    ${candidateCases ? `<h3>Your cases</h3><ul class="result-list">${candidateCases}</ul>` : ""}
   `,
   };
 }

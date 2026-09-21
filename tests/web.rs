@@ -1440,6 +1440,63 @@ fn static_interview_script_leaves_candidate_identity_to_the_server() {
     assert!(!source.contains("candidateIdentity"));
 }
 
+/// The node shapes a judge may declare. The browser decides the same thing
+/// again in `candidateTypeMatches`, and
+/// `every_supported_arg_type_is_one_the_browser_matches` holds the two
+/// together.
+const SUPPORTED_ARG_TYPES: [&str; 8] = [
+    "linkedList",
+    "linkedListArray",
+    "randomList",
+    "graphNode",
+    "binaryTree",
+    "nextTree",
+    "treeNodeValue",
+    "cyclePos",
+];
+
+/// Two copies of one decision: this list admits a judge into the bank, and the
+/// arms of `candidateTypeMatches` in web/runners.js decide whether a candidate
+/// may write a case against it. A type added here and to the harnesses but not
+/// to the browser refuses every candidate-authored case for that scenario, and
+/// nothing else notices, because an unmatched shape falls through to `false`
+/// rather than failing.
+#[test]
+fn every_supported_arg_type_is_one_the_browser_matches() {
+    let runners = std::fs::read_to_string("web/runners.js").expect("web/runners.js is readable");
+    let after = runners
+        .split_once("function candidateTypeMatches")
+        .expect("the browser still names the matcher candidateTypeMatches")
+        .1;
+
+    // Counted rather than split on the first "\n}\n", which only found the
+    // right brace while every nested one stayed indented. A closing brace at
+    // column zero, or one inside a template literal, would have cut the body
+    // short and reported it as a missing arm.
+    let mut depth = 0usize;
+    let mut end = None;
+    for (at, character) in after.char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(at);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let body = &after[..end.expect("the matcher still has a body")];
+    for arg_type in SUPPORTED_ARG_TYPES {
+        assert!(
+            body.contains(&format!("\"{arg_type}\"")),
+            "{arg_type} is admitted into the bank but no arm of candidateTypeMatches names it"
+        );
+    }
+}
+
 #[test]
 fn static_problem_bank_and_judges_cover_each_problem() {
     let problems = browser_problem_bank();
@@ -1449,19 +1506,9 @@ fn static_problem_bank_and_judges_cover_each_problem() {
 
     let supported_arg_type = |arg_type: &serde_json::Value| {
         arg_type.is_null()
-            || matches!(
-                arg_type.as_str(),
-                Some(
-                    "linkedList"
-                        | "linkedListArray"
-                        | "randomList"
-                        | "graphNode"
-                        | "binaryTree"
-                        | "nextTree"
-                        | "treeNodeValue"
-                        | "cyclePos",
-                )
-            )
+            || arg_type
+                .as_str()
+                .is_some_and(|name| SUPPORTED_ARG_TYPES.contains(&name))
     };
     let supported_signature_type = |signature_type: &serde_json::Value| {
         matches!(

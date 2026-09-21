@@ -451,7 +451,16 @@ test("the report card this page renders names no finding either", () => {
   // section, whose two arms are named in the sentence list below, and the two
   // feedback sections, whose titles are the words "Coding" and "Communication"
   // in the vocabulary set instead.
-  const headings = [...read("web/render.js").matchAll(/<h3[^>]*>([^<{]+)<\/h3>/g)].map(
+  const renderer = read("web/render.js");
+  // Ends past `frameworkEvidenceMarkup`, not at the downloadable report. That
+  // function renders a card section of its own, and cutting the slice before it
+  // dropped "Framework evidence" from this list, so a rename reusing words the
+  // vocabulary already holds would have passed both checks below.
+  const reportRenderer = renderer.slice(
+    renderer.indexOf("export function feedbackMarkup"),
+    renderer.indexOf("/// Owns transcript segments"),
+  );
+  const headings = [...reportRenderer.matchAll(/<h3[^>]*>([^<{]+)<\/h3>/g)].map(
     (match) => match[1],
   );
   assert.ok(headings.length >= 4, `only ${headings.length} headings found in web/render.js`);

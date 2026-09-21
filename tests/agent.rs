@@ -280,7 +280,7 @@ fn prompt_samples() -> Value {
             hints_used: 2,
             duration_min: 45,
             elapsed_min: 12.4,
-            test_summary: "Latest test run: 2/3 cases passed.",
+            test_summary: "Latest test run: 2/3 cases passed.\n- CANDIDATE CASE empty input: got []",
         }),
         "reportEmpty": report_prompt(ReportPromptInput {
             problem,
@@ -699,8 +699,8 @@ fn prompt_golden_digest_matches_versions() {
     );
     let versions = (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION);
     let expected_digest = [(
-        (3, 5),
-        "d7a7b02214f9b90df2af6e31308932c94fbdb30acc853dc801e523fe74badf33",
+        (3, 6),
+        "ab9b4888782a29ca52de61c7b6eea95cabdfc6de67175ee1c2f75a98fcd56dcb",
     )]
     .into_iter()
     .find_map(|(candidate, digest)| (candidate == versions).then_some(digest));
@@ -2287,6 +2287,57 @@ fn runtime_helpers_match_frozen_fixture() {
             },
         ]),
         expected["transcript"].as_str().unwrap()
+    );
+}
+
+#[test]
+fn test_summary_lists_the_candidates_cases() {
+    let run = sanitize_test_run(&json!({
+        "language": "python",
+        "passed": 2,
+        "total": 2,
+        "failures": [],
+        "candidateCases": [
+            {"label": "Your case 1", "got": "[0, 1]", "expected": null},
+            {"label": "Your case 2", "error": "ValueError"},
+            {"label": "Your case 3", "got": "[0, 1]", "expected": "[1, 2]"},
+            {"label": "Your case 4", "got": "4"},
+            {"label": "Your case 5", "got": "5"},
+            {"label": "Your case 6", "got": "6"}
+        ]
+    }));
+    let summary = format_test_run(Some(&run), 1);
+    assert!(summary.contains("2/2 cases passed."));
+
+    // A case with no expectation says only what it printed, so the reviewer
+    // cannot read a contradiction into it.
+    assert!(summary.contains("CANDIDATE CASE Your case 1: got [0, 1]\n"));
+    assert!(summary.contains("CANDIDATE CASE Your case 2: raised ValueError"));
+    assert!(summary.contains("CANDIDATE CASE Your case 3: got [0, 1], candidate expected [1, 2]"));
+    assert!(summary.contains("CANDIDATE CASE Your case 5: got 5"));
+
+    // Six sent, five kept.
+    assert!(!summary.contains("Your case 6"));
+
+    // Again with nothing in front of the renderer. `sanitize_test_run` already
+    // caps the list, so asserting the sixth is absent above proves only that
+    // the sanitizer works: delete `.take(MAX_CANDIDATE_CASES)` from
+    // `format_test_run` and every assertion so far still passes, which is the
+    // silent-cap failure the constant's own comment warns about. Rendering a
+    // run the sanitizer never saw is what holds the renderer to its own copy.
+    let unsanitized = json!({
+        "language": "python",
+        "passed": 2,
+        "total": 2,
+        "candidateCases": (1..=6)
+            .map(|index| json!({"label": format!("Your case {index}"), "got": index.to_string()}))
+            .collect::<Vec<_>>(),
+    });
+    let direct = format_test_run(Some(&unsanitized), 1);
+    assert!(direct.contains("CANDIDATE CASE Your case 5: got 5"));
+    assert!(
+        !direct.contains("Your case 6"),
+        "the prompt renderer has to apply the cap itself, not inherit it"
     );
 }
 
@@ -5153,17 +5204,17 @@ fn generated_problem_metadata_exposes_no_private_rubric() {
 
 #[test]
 fn interview_contract_versions_are_one_closed_bundle() {
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 7);
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 8);
     assert_eq!(LIVE_PROMPT_VERSION, 3);
-    assert_eq!(REPORT_PROMPT_VERSION, 5);
+    assert_eq!(REPORT_PROMPT_VERSION, 6);
     assert_eq!(RUBRIC_VERSION, 1);
     assert_eq!(REPORT_SCHEMA_VERSION, 2);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 7,
+            "bundleVersion": 8,
             "livePromptVersion": 3,
-            "reportPromptVersion": 5,
+            "reportPromptVersion": 6,
             "rubricVersion": 1,
             "reportSchemaVersion": 2,
         })
