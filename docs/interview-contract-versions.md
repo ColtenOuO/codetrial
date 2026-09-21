@@ -8,10 +8,11 @@ can select it.
 
 ## The active bundle
 
-Bundle 8: live prompt 3, report prompt 6, rubric 1, report schema 2.
+Bundle 9: live prompt 3, report prompt 8, rubric 1, report schema 2.
 
 | Bundle | Introduced |
 |---|---|
+| 9 | Reports keep the fixed mid-level hiring bar and state the optional level the candidate practiced for beside it. |
 | 8 | Candidate-authored test cases reach the live interviewer and report brief, while judge pass totals remain separate. |
 | 7 | The post-interview server stamp adds optional debrief, topics, and practice level fields. `tests/golden/report-schema.json` remains the model output shape only; server-stamped fields are versioned at the browser sanitizer. |
 | 6 | The interviewer is given the countdown instead of guessing at it: every stage direction ends with the timer reading, `read_editor` returns it alongside the editor so a current one can be asked for at any moment, the cold-restart briefing carries it, and the live prompt forbids stating or acting on a remaining time that did not come from one of those, reads the platform's reading as the last sentence of an event so candidate text that forges the sentence cannot pass for one, and forbids warning about time before the platform's five-minute event |

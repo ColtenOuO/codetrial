@@ -283,6 +283,7 @@ fn prompt_samples() -> Value {
             duration_min: 45,
             elapsed_min: 12.4,
             test_summary: "Latest test run: 2/3 cases passed.\n- CANDIDATE CASE empty input: got []",
+            practice_level: None,
         }),
         "reportEmpty": report_prompt(ReportPromptInput {
             problem,
@@ -296,6 +297,7 @@ fn prompt_samples() -> Value {
             duration_min: 45,
             elapsed_min: 0.0,
             test_summary: "",
+            practice_level: None,
         }),
         "reportHalfElapsed": report_prompt(ReportPromptInput {
             problem,
@@ -309,6 +311,7 @@ fn prompt_samples() -> Value {
             duration_min: 45,
             elapsed_min: 12.5,
             test_summary: "",
+            practice_level: None,
         }),
 
         // Assembled by the real builder rather than written out here. A
@@ -342,6 +345,7 @@ fn prompt_samples() -> Value {
             duration_min: 45,
             elapsed_min: 12.4,
             test_summary: "Latest test run: 2/3 cases passed.",
+            practice_level: None,
         }),
         "reportMultiline": report_prompt(ReportPromptInput {
             problem,
@@ -355,6 +359,7 @@ fn prompt_samples() -> Value {
             duration_min: 45,
             elapsed_min: 12.0,
             test_summary: "Latest test run (run #1, python): 2/3 cases passed.",
+            practice_level: None,
         }),
     })
 }
@@ -730,6 +735,10 @@ fn prompt_golden_digest_matches_versions() {
         (
             (3, 7),
             "54aa0b470e79ce3b4b299d278fc2947679a70f750926a1cfcd61831859a62b8d",
+        ),
+        (
+            (3, 8),
+            "1be28b91ea6148c278f262c01d61670563ff4752b37ad517675284e9304a5825",
         ),
     ]
     .into_iter()
@@ -1550,9 +1559,38 @@ fn report_brief_states_the_hint_rung() {
         duration_min: 45,
         elapsed_min: 12.0,
         test_summary: "",
+        practice_level: Some("intern"),
     });
     assert!(prompt.contains("candidate reached hint rung 2 of 3"));
     assert!(prompt.contains("1 hint was volunteered rather than requested"));
+}
+
+#[test]
+fn report_prompt_names_the_practice_level() {
+    let base = ReportPromptInput {
+        problem: get_problem(Some("two-sum")),
+        transcript: "",
+        rolling_assessment: "",
+        final_code: "",
+        language: "python",
+        hints_used: 0,
+        hint_rung: 0,
+        volunteered_hints: 0,
+        duration_min: 45,
+        elapsed_min: 12.0,
+        test_summary: "",
+        practice_level: Some("intern"),
+    };
+    let selected = report_prompt(base);
+    assert!(selected.contains("candidate practiced for intern"));
+    assert!(selected.contains("fixed mid-level bar"));
+
+    let absent = report_prompt(ReportPromptInput {
+        practice_level: None,
+        ..base
+    });
+    assert!(absent.contains("PRACTICE LEVEL: Not specified"));
+    assert!(absent.contains("Do not invent or mention a practice level"));
 }
 
 #[test]
@@ -1688,6 +1726,7 @@ fn live_instructions_pose_the_variant_and_hold_no_source_or_walkthrough() {
         duration_min: 45,
         elapsed_min: 30.0,
         test_summary: "",
+        practice_level: None,
     });
     assert!(report.contains("Reference notes on approaches"));
     assert!(report.contains("never name the published problem, its title, LeetCode"));
@@ -1823,6 +1862,7 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
             duration_min: 15,
             elapsed_min: 15.0,
             test_summary,
+            practice_level: None,
         });
 
         assert!(prompt.contains(transcript), "{name}: transcript was lost");
@@ -1971,6 +2011,7 @@ fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
             duration_min: 45,
             elapsed_min: 20.0,
             test_summary: "No trusted server-side test was available.",
+            practice_level: None,
         }),
         other => panic!("unknown reaction kind {other}"),
     }
@@ -5282,17 +5323,17 @@ fn generated_problem_metadata_exposes_no_private_rubric() {
 
 #[test]
 fn interview_contract_versions_are_one_closed_bundle() {
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 8);
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 9);
     assert_eq!(LIVE_PROMPT_VERSION, 3);
-    assert_eq!(REPORT_PROMPT_VERSION, 7);
+    assert_eq!(REPORT_PROMPT_VERSION, 8);
     assert_eq!(RUBRIC_VERSION, 1);
     assert_eq!(REPORT_SCHEMA_VERSION, 2);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 8,
+            "bundleVersion": 9,
             "livePromptVersion": 3,
-            "reportPromptVersion": 7,
+            "reportPromptVersion": 8,
             "rubricVersion": 1,
             "reportSchemaVersion": 2,
         })
