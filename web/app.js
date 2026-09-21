@@ -570,11 +570,21 @@ function recommend(note = "") {
     return;
   }
   setProblem(choice.picked);
-  nodes.recommendation.textContent = choice.review
-    ? `${note}Review due after ${choice.review.intervalDays} day${choice.review.intervalDays === 1 ? "" : "s"}: ${title(choice.picked)}.`
-    : choice.repeat
-      ? `${note}You have passed every problem at this level. Recommended again: ${title(choice.picked)}.`
-      : `${note}Recommended: ${title(choice.picked)}.`;
+  if (choice.review) {
+    // A review can fall outside the levels now selected, so the card is
+    // unhidden and the level said out loud rather than silently ignored.
+    choice.picked.button.hidden = false;
+    const level = selectedDifficulties().has(choice.picked.difficulty)
+      ? ""
+      : ` (${choice.picked.difficulty})`;
+    const days = choice.review.intervalDays;
+    nodes.recommendation.textContent =
+      `${note}Review due after ${days} day${days === 1 ? "" : "s"}${level}: ${title(choice.picked)}.`;
+    return;
+  }
+  nodes.recommendation.textContent = choice.repeat
+    ? `${note}You have passed every problem at this level. Recommended again: ${title(choice.picked)}.`
+    : `${note}Recommended: ${title(choice.picked)}.`;
 }
 
 /// Read off `reports` alone, so it is rendered wherever those change: the two
