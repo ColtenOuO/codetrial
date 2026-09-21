@@ -6,3 +6,10 @@
 # them, so exporting RUSTFLAGS on macOS means appending -Clink-arg=-ObjC too.
 [target.'cfg(target_vendor = "apple")']
 rustflags = ["-Clink-arg=-ObjC"]
+
+# libwebrtc bundled by webrtc-sys on Windows is compiled with /MT (static CRT).
+# Rust defaults to dynamic CRT (/MD), causing LNK2038 runtime mismatch without
+# this flag, and as the note above says, a RUSTFLAGS env var replaces it rather
+# than adding to it, so exporting one on Windows means repeating the flag.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
