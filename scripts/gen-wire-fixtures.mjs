@@ -120,7 +120,7 @@ function testResultsCases() {
         // Six candidate cases against a cap of five, for the reason the
         // failures above give: an empty `candidateCases` in the fixture let
         // `CANDIDATE_CASE_LIMIT` move without `--check` seeing it, and the
-        // Rust copy of the same number is pinned separately in tests/agent.rs.
+        // Rust copy of the same number is pinned separately in tests/agent/runtime.rs.
         name: "more candidate cases than the payload carries",
         payload: lib.testPayload({
           passed: 1,
