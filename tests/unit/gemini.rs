@@ -7,34 +7,6 @@ use super::*;
 use crate::config::load_from_pairs;
 use crate::runtime::bootstrap;
 
-fn valid_report_text() -> String {
-    let improvements = [
-        ("Algorithm", "Explain complexity"),
-        ("Test", "Test boundaries"),
-        ("Action", "Name your action"),
-        ("Result", "State the result"),
-    ];
-    let phases = [
-        "Repeat",
-        "Example",
-        "Algorithm",
-        "Coding",
-        "Test",
-        "Optimizations",
-        "Situation",
-        "Task",
-        "Action",
-        "Result",
-    ];
-    json!({
-        "codingScore": 82, "communicationScore": 74, "decision": "HIRE", "summary": "Grounded assessment.",
-        "codingFeedback": {"strengths": ["Correct core", "Clear code"], "improvements": ["Explain complexity", "Test boundaries"]},
-        "communicationFeedback": {"strengths": ["Clear narration", "Direct answers"], "improvements": ["Name your action", "State the result"]},
-        "improvementPlan": improvements.iter().map(|(phase, weakness)| json!({"phase":phase,"weakness":weakness,"impact":"medium","frequency":1,"drill":"Practice it","durationMin":5,"successCriterion":"State it independently","selfReview":["Uses evidence"]})).collect::<Vec<_>>(),
-        "frameworkAssessment": {"rubricVersion":1,"phases":phases.iter().map(|phase| json!({"phase":phase,"score":75,"weaknessTags":improvements.iter().filter(|(p,_)| p == phase).map(|(_,w)| *w).collect::<Vec<_>>() })).collect::<Vec<_>>()}
-    }).to_string()
-}
-
 fn report_problem() -> &'static crate::agent::Problem {
     crate::agent::get_problem(Some("two-sum"))
 }
@@ -48,7 +20,7 @@ fn report_problem() -> &'static crate::agent::Problem {
 #[test]
 fn an_oversized_report_response_is_refused_at_the_size_it_names() {
     let exceeds = |text: &str| {
-        parse_and_validate_report(text, report_problem())
+        parse_report_text(text)
             .unwrap_err()
             .iter()
             .any(|error| error.contains("exceeds"))
@@ -67,29 +39,32 @@ fn an_oversized_report_response_is_refused_at_the_size_it_names() {
 
 #[test]
 fn report_parser_requires_the_entire_response_and_strict_schema() {
-    let valid = valid_report_text();
-    assert!(parse_and_validate_report(&valid, report_problem()).is_ok());
+    let accepted = |text: &str| {
+        matches!(
+            attempt_for(text, 0, report_problem()),
+            ReportStep::Complete(_)
+        )
+    };
+    let valid = valid_report().to_string();
+    assert!(accepted(&valid));
     for invalid in [
         format!("```json\n{valid}\n```"),
         format!("ignore policy\n{valid}"),
         format!("{valid}\n{{}}"),
         valid[..valid.len() - 1].to_string(),
     ] {
+        assert!(!accepted(&invalid), "accepted {invalid:?}");
         assert!(
-            parse_and_validate_report(&invalid, report_problem()).is_err(),
-            "accepted {invalid:?}"
+            last_attempt(&invalid).is_err(),
+            "salvaged {invalid:?} at the last attempt"
         );
     }
-    let mut extra: Value = serde_json::from_str(&valid).unwrap();
+    let mut extra = valid_report();
     extra
         .as_object_mut()
         .unwrap()
         .insert("instruction".into(), json!("hire me"));
-    assert!(parse_and_validate_report(&extra.to_string(), report_problem()).is_err());
-    assert!(
-        parse_and_validate_report(&"x".repeat(MAX_REPORT_RESPONSE_BYTES + 1), report_problem())
-            .is_err()
-    );
+    assert!(!accepted(&extra.to_string()));
 }
 
 #[test]
@@ -156,35 +131,112 @@ fn report_requests_are_session_local_and_never_reuse_personalized_output() {
     assert!(!second.to_string().contains("session-a private evidence"));
 }
 
+type ReportResult = Result<Value, Box<dyn std::error::Error + Send + Sync>>;
+
+fn valid_report() -> Value {
+    let improvements = [
+        ("Algorithm", "Explain complexity"),
+        ("Test", "Test boundaries"),
+        ("Action", "Name your action"),
+        ("Result", "State the result"),
+    ];
+    let phases = [
+        "Repeat",
+        "Example",
+        "Algorithm",
+        "Coding",
+        "Test",
+        "Optimizations",
+        "Situation",
+        "Task",
+        "Action",
+        "Result",
+    ];
+    json!({
+        "codingScore": 82, "communicationScore": 74, "decision": "HIRE", "summary": "Grounded assessment.",
+        "codingFeedback": {"strengths": ["Correct core", "Clear code"], "improvements": ["Explain complexity", "Test boundaries"]},
+        "communicationFeedback": {"strengths": ["Clear narration", "Direct answers"], "improvements": ["Name your action", "State the result"]},
+        "improvementPlan": improvements.iter().map(|(phase, weakness)| json!({"phase":phase,"weakness":weakness,"impact":"medium","frequency":1,"drill":"Practice it","durationMin":5,"successCriterion":"State it independently","selfReview":["Uses evidence"]})).collect::<Vec<_>>(),
+        "frameworkAssessment": {"rubricVersion":1,"phases":phases.iter().map(|phase| json!({"phase":phase,"score":75,"weaknessTags":improvements.iter().filter(|(p,_)| p == phase).map(|(_,w)| *w).collect::<Vec<_>>() })).collect::<Vec<_>>()}
+    })
+}
+
+fn report_with_self_review(item: usize, checks: Value) -> String {
+    let mut report = valid_report();
+    report["improvementPlan"][item]["selfReview"] = checks;
+    report.to_string()
+}
+
+/// One attempt of a fresh loop, as the `attempt`-th after the first.
+fn attempt_for(output: &str, attempt: usize, problem: &crate::agent::Problem) -> ReportStep {
+    ReportAttempts { held: None }.step("original", output, attempt, problem)
+}
+
+/// Every attempt answered with `output`, so the last one has no repair left.
+fn last_attempt_for(output: &str, problem: &crate::agent::Problem) -> ReportResult {
+    run_for(&[output; MAX_REPORT_REPAIRS + 1], problem).map(|(report, _)| report)
+}
+
+fn last_attempt(output: &str) -> ReportResult {
+    last_attempt_for(output, report_problem())
+}
+
+/// Answers each call with the next scripted response, and fails once they run
+/// out.
+struct Scripted<'a>(std::slice::Iter<'a, &'a str>);
+
+impl ReportTransport for Scripted<'_> {
+    fn call(
+        &mut self,
+        _prompt: &str,
+    ) -> impl Future<Output = Result<String, Box<dyn std::error::Error + Send + Sync>>> + Send {
+        std::future::ready(
+            self.0
+                .next()
+                .map(|output| output.to_string())
+                .ok_or_else(|| "no answer".into()),
+        )
+    }
+}
+
+/// The production loop over scripted responses.
+fn run_for(outputs: &[&str], problem: &crate::agent::Problem) -> ReportOutcome {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(report_attempts(
+            "original",
+            problem,
+            &mut Scripted(outputs.iter()),
+        ))
+}
+
+fn run_attempts(outputs: &[&str]) -> ReportResult {
+    run_for(outputs, report_problem()).map(|(report, _)| report)
+}
+
 #[test]
 fn semantic_report_state_repairs_until_the_budget_is_out() {
     for used in 0..MAX_REPORT_REPAIRS {
         assert!(matches!(
-            report_semantic_step("original", "{}", used, report_problem()),
-            ReportSemanticStep::Repair(_)
+            attempt_for("{}", used, report_problem()),
+            ReportStep::Repair(_)
         ));
     }
-    let ReportSemanticStep::Failed(errors) =
-        report_semantic_step("original", "{}", MAX_REPORT_REPAIRS, report_problem())
-    else {
-        panic!("the last attempt has no repair left");
-    };
+    let error = last_attempt("{}").expect_err("the last attempt has no repair left");
     assert!(
-        errors.iter().any(|error| error.starts_with("$")),
-        "the failure has to name the rules it broke: {errors:?}"
+        error.to_string().starts_with(&format!(
+            "Gemini report failed schema validation after {MAX_REPORT_REPAIRS} repairs: $"
+        )),
+        "the failure has to name the rules it broke: {error}"
     );
-    assert!(matches!(
-        report_semantic_step("original", &valid_report_text(), 0, report_problem()),
-        ReportSemanticStep::Complete(_)
-    ));
 }
 
 #[test]
 fn report_naming_the_published_problem_is_repaired() {
-    let mut report: Value = serde_json::from_str(&valid_report_text()).unwrap();
+    let mut report = valid_report();
     report["summary"] = json!("This is the classic 3 Sum problem.");
-    let ReportSemanticStep::Repair(repair) = report_semantic_step(
-        "original",
+    let ReportStep::Repair(repair) = attempt_for(
         &report.to_string(),
         0,
         crate::agent::get_problem(Some("3sum")),
@@ -193,6 +245,274 @@ fn report_naming_the_published_problem_is_repaired() {
     };
     assert!(repair.contains("$.summary: names the published problem"));
 }
+
+/// While a repair is left, an unsafe check goes back to the model, which can
+/// rewrite it into something specific; dropping it early would spend that.
+/// The repair names the phrase, since the model cannot see the list it is on.
+#[test]
+fn an_unsafe_self_review_check_is_repaired_while_repairs_remain() {
+    let output = report_with_self_review(0, json!(["Check whether you appeared nervous."]));
+    for used in 0..MAX_REPORT_REPAIRS {
+        let ReportStep::Repair(repair) = attempt_for(&output, used, report_problem()) else {
+            panic!("attempt {used} still has a repair to spend");
+        };
+        assert!(repair.contains(
+            "selfReview[0]: unsupported delivery or personality judgment (\\\"nervous\\\")"
+        ));
+    }
+}
+
+#[test]
+fn the_last_attempt_drops_unsafe_self_review_checks_and_keeps_the_report() {
+    let output = report_with_self_review(
+        0,
+        json!([
+            "Check whether you appeared nervous.",
+            "Name the observed algorithmic trade-off"
+        ]),
+    );
+    let report = last_attempt(&output).expect("an unsafe coaching check must not lose the report");
+    assert_eq!(report["codingScore"], 82);
+    assert_eq!(
+        report["improvementPlan"][0]["selfReview"],
+        json!(["Name the observed algorithmic trade-off"])
+    );
+    assert_eq!(
+        report["improvementPlan"][1]["selfReview"],
+        json!(["Uses evidence"]),
+        "a plan item with nothing unsafe is left as the model wrote it"
+    );
+}
+
+/// The replacement is fixed text, so it is checked once here against every
+/// title it could be shown under rather than trusted per report.
+#[test]
+fn a_self_review_the_last_attempt_emptied_gets_a_replacement_safe_for_every_problem() {
+    let mut raw = valid_report();
+    raw["improvementPlan"][0]["selfReview"] = json!(["Your personality seemed introverted."]);
+    for problem in crate::agent::PROBLEMS {
+        let salvage = salvage_report(raw.clone(), 0, problem)
+            .unwrap_or_else(|| panic!("rejected for {}", problem.id));
+        assert_eq!(
+            salvage.report["improvementPlan"][0]["selfReview"],
+            json!([crate::agent::SELF_REVIEW_REPLACEMENT])
+        );
+    }
+}
+
+/// The salvage removes judgments, not malformed output: nothing unsafe was
+/// taken out of these, so each is refused exactly as it was before.
+#[test]
+fn the_last_attempt_still_refuses_a_malformed_self_review() {
+    for checks in [
+        json!([]),
+        json!([42]),
+        json!([null, "Uses evidence"]),
+        json!("Uses evidence"),
+        json!([42, "Check whether you appeared nervous."]),
+    ] {
+        assert!(
+            last_attempt(&report_with_self_review(0, checks.clone())).is_err(),
+            "{checks} must not be salvaged"
+        );
+    }
+
+    // A salvage on one item does not mend another: the empty list was the
+    // model's, not one a drop emptied, so it gets no replacement.
+    let mut report = valid_report();
+    report["improvementPlan"][0]["selfReview"] = json!(["Check whether you appeared nervous."]);
+    report["improvementPlan"][1]["selfReview"] = json!([]);
+    assert!(last_attempt(&report.to_string()).is_err());
+}
+
+/// Only `selfReview` is optional coaching text. The same judgment in a drill
+/// is part of what the candidate is told to do, so it still loses the report.
+#[test]
+fn the_last_attempt_still_refuses_a_judgment_outside_self_review() {
+    let mut report = valid_report();
+    report["improvementPlan"][0]["drill"] = json!("Practice keeping eye contact");
+    report["improvementPlan"][0]["selfReview"] = json!(["Check whether you appeared nervous."]);
+    assert!(last_attempt(&report.to_string()).is_err());
+}
+
+/// Issue #81: the only error left after both repairs was one self-review
+/// check on the third plan item, and the candidate got `INCOMPLETE` for it.
+/// The salvaged report has to survive the whole way to the card, which runs
+/// `final_report` over what `generate_report` returns.
+#[test]
+fn a_lone_unsafe_check_after_both_repairs_still_reaches_the_card() {
+    let problem = crate::agent::get_problem(Some("two-sum-ii-input-array-is-sorted"));
+    assert_eq!(problem.id, "two-sum-ii-input-array-is-sorted");
+    let output = report_with_self_review(2, json!(["Notice whether you sounded confident."]));
+    let raw = last_attempt_for(&output, problem)
+        .expect("one unsafe coaching check must not lose the evaluation");
+    let card = crate::agent::final_report(Some(&raw), 1, None, problem);
+    assert!(card.get("incomplete").is_none(), "{card}");
+    assert_eq!(card["codingScore"], 82);
+    assert_eq!(card["hintsUsed"], 1);
+}
+
+/// Five checks break the limit of four, and dropping the unsafe one mends it.
+/// That is accepted on purpose: every check left is one the model wrote
+/// safely. Six with one unsafe are still five, and still refused.
+#[test]
+fn an_overlong_self_review_is_accepted_only_if_the_drop_brings_it_within_the_limit() {
+    let with_one_unsafe = |safe: usize| {
+        let mut checks = (1..=safe)
+            .map(|n| json!(format!("Names trade-off {n}")))
+            .collect::<Vec<_>>();
+        checks.insert(1, json!("Check whether you appeared nervous."));
+        report_with_self_review(0, Value::Array(checks))
+    };
+    let report = last_attempt(&with_one_unsafe(4)).expect("four safe checks are a valid list");
+    assert_eq!(
+        report["improvementPlan"][0]["selfReview"],
+        json!(
+            (1..=4)
+                .map(|n| format!("Names trade-off {n}"))
+                .collect::<Vec<_>>()
+        )
+    );
+    assert!(last_attempt(&with_one_unsafe(5)).is_err());
+}
+
+/// The count is what the log line reports, so it is the sum over every plan
+/// item, and two items given the same replacement are still a valid plan:
+/// the duplicate rule is per list, not across them.
+#[test]
+fn unsafe_checks_across_plan_items_are_all_dropped_and_counted() {
+    let mut report = valid_report();
+    report["improvementPlan"][0]["selfReview"] = json!(["Check whether you appeared nervous."]);
+    report["improvementPlan"][1]["selfReview"] =
+        json!(["Uses evidence", "Your body language was closed."]);
+    report["improvementPlan"][3]["selfReview"] = json!(["Mind your accent."]);
+
+    let salvage = salvage_report(report, 0, report_problem())
+        .expect("every item is safe once its unsafe checks are gone");
+    assert_eq!(salvage.dropped, 3);
+    let lists = salvage.report["improvementPlan"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["selfReview"].clone())
+        .collect::<Vec<_>>();
+    let replaced = json!([crate::agent::SELF_REVIEW_REPLACEMENT]);
+    assert_eq!(lists.iter().filter(|list| **list == replaced).count(), 2);
+    assert!(lists.contains(&json!(["Uses evidence"])));
+}
+
+/// The case the last-attempt salvage alone missed: the one fault was an
+/// unsafe check, the repair asked for broke something else, and the report
+/// the first response had is what the candidate gets instead of nothing.
+#[test]
+fn a_repair_that_comes_back_worse_keeps_the_report_held_before_it() {
+    let salvageable = report_with_self_review(
+        0,
+        json!(["Check whether you appeared nervous.", "Uses evidence"]),
+    );
+    let report = run_attempts(&[&salvageable, "{}", "not json"])
+        .expect("the first response was a report once its unsafe check went");
+    assert_eq!(report["codingScore"], 82);
+    assert_eq!(
+        report["improvementPlan"][0]["selfReview"],
+        json!(["Uses evidence"])
+    );
+}
+
+#[test]
+fn a_transport_failure_after_a_salvageable_response_keeps_the_report() {
+    let salvageable = report_with_self_review(0, json!(["Check whether you appeared nervous."]));
+    let report = run_attempts(&[&salvageable]).expect("the held report outlives the socket");
+    assert_eq!(report["codingScore"], 82);
+
+    let error = run_attempts(&["{}"]).expect_err("nothing was held, so the failure stands");
+    assert_eq!(error.to_string(), "no answer");
+}
+
+/// The log line is the only record of a salvage used, so what it counts is
+/// pinned on both paths that use one: every check dropped from the held
+/// response, the attempt that response came from rather than the one that
+/// ended the loop, why the loop ended, and the error it ended on, quoted so a
+/// key the model chose cannot forge a line of its own.
+#[test]
+fn a_used_salvage_logs_the_checks_it_dropped_and_the_attempt_it_came_from() {
+    let mut report = valid_report();
+    report["improvementPlan"][0]["selfReview"] = json!(["Check whether you appeared nervous."]);
+    report["improvementPlan"][1]["selfReview"] = json!(["Mind your accent.", "Uses evidence"]);
+    let salvageable = report.to_string();
+
+    let (_, line) = run_for(&[&salvageable, "{}"], report_problem())
+        .expect("the held report outlives the socket");
+    assert_eq!(
+        line.as_deref(),
+        Some(
+            "gemini report self_review_dropped problem=two-sum checks=2 attempt=0 \
+             after=transport_error error=\"no answer\""
+        )
+    );
+
+    let mut forged = valid_report();
+    forged["x\nforged"] = json!(1);
+    let forged = forged.to_string();
+    let (_, line) = run_for(&[&salvageable, "{}", &forged], report_problem())
+        .expect("the first response was held");
+    assert_eq!(
+        line,
+        Some(format!(
+            "gemini report self_review_dropped problem=two-sum checks=2 attempt=0 \
+             after=no_repair_left error=\"Gemini report failed schema validation \
+             after {MAX_REPORT_REPAIRS} repairs: $.x\\nforged: unknown field\""
+        ))
+    );
+}
+
+/// A salvage a later attempt beats was never shown to anyone, so it is never
+/// logged either.
+#[test]
+fn a_salvage_a_later_attempt_beats_is_not_logged() {
+    let salvageable = report_with_self_review(0, json!(["Check whether you appeared nervous."]));
+    let valid = valid_report().to_string();
+    let (_, line) = run_for(&[&salvageable, &valid], report_problem()).unwrap();
+    assert_eq!(line, None);
+}
+
+/// Holding a salvage never costs the candidate the repair itself: a repaired
+/// response wins over the held one, and a later salvage over an earlier.
+#[test]
+fn a_better_later_attempt_wins_over_a_held_salvage() {
+    let first = report_with_self_review(0, json!(["Check whether you appeared nervous."]));
+    let repaired = report_with_self_review(0, json!(["Names the rewritten trade-off"]));
+    let report = run_attempts(&[&first, &repaired]).unwrap();
+    assert_eq!(
+        report["improvementPlan"][0]["selfReview"],
+        json!(["Names the rewritten trade-off"])
+    );
+
+    let second = report_with_self_review(
+        0,
+        json!(["Names the second trade-off", "Mind your accent."]),
+    );
+    let report = run_attempts(&[&first, &second, "{}"]).unwrap();
+    assert_eq!(
+        report["improvementPlan"][0]["selfReview"],
+        json!(["Names the second trade-off"])
+    );
+}
+
+#[test]
+fn sanitizing_a_report_without_a_plan_changes_nothing() {
+    for raw in [
+        json!({}),
+        json!({"improvementPlan": "none"}),
+        json!({"improvementPlan": [{}]}),
+    ] {
+        assert_eq!(
+            crate::agent::sanitize_report_candidate(raw.clone()),
+            (raw, 0)
+        );
+    }
+}
+
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
 

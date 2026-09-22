@@ -115,10 +115,37 @@ fn unsupported_delivery_and_personality_judgments_are_rejected_atomically() {
         let mut report = valid_strict_report();
         report["summary"] = json!(claim);
         let errors = validate_report_candidate(&report, get_problem(Some("two-sum"))).unwrap_err();
+
+        // The filter matches a normalized claim, so "lack-of-confidence" trips
+        // " lack of confidence ". Compare against the same form, or a phrase
+        // this claim really did trip reads as the wrong one.
+        let normalized = claim
+            .chars()
+            .map(|character| {
+                if character.is_alphanumeric() {
+                    character.to_ascii_lowercase()
+                } else {
+                    ' '
+                }
+            })
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(
-            errors
-                .iter()
-                .any(|error| error == "$.summary: unsupported delivery or personality judgment"),
+            errors.iter().any(|error| {
+                let Some(phrase) = error
+                    .strip_prefix("$.summary: unsupported delivery or personality judgment (\"")
+                    .and_then(|named| named.strip_suffix("\")"))
+                else {
+                    return false;
+                };
+
+                // The phrase is the one this claim tripped on, not merely the
+                // first on the list: naming the wrong one sends a repair after
+                // words the model never wrote.
+                normalized.contains(phrase)
+            }),
             "claim escaped delivery policy: {claim:?}: {errors:?}"
         );
         let incomplete = final_report(Some(&report), 0, None, get_problem(Some("two-sum")));

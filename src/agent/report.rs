@@ -305,6 +305,62 @@ pub fn validate_report_candidate(
     Ok(report)
 }
 
+/// What a self-review list emptied by the filter is given instead, so the
+/// plan item still has the one check the schema requires.
+pub(crate) const SELF_REVIEW_REPLACEMENT: &str = "Review this step against the interview evidence";
+
+/// Remove the self-review checks that judge delivery or personality, and
+/// say how many went.
+///
+/// A self-review check is optional coaching text, unlike a score, decision, or
+/// feedback improvement. Keeping the rest of a report when one check judges
+/// delivery or personality is more useful than turning an otherwise complete
+/// interview into an incomplete one. This is the provider's fallback for when
+/// its repairs run out or its calls stop answering, not part of validation:
+/// while a repair can still be asked for, the model rewriting the check gives
+/// the candidate something specific, and `validate_report` stays strict so no
+/// other caller learns to lean on it.
+///
+/// Only a string that trips the judgment filter is removed. A malformed entry
+/// or an empty list is left for validation to refuse, because nothing unsafe
+/// was taken out of it. A list over the length limit can come back within it,
+/// and is then accepted: what is left is the model's own safe checks. A list
+/// this emptied is refilled because the schema floors it at one item, not
+/// because the line is worth reading, and it is fixed text rather than
+/// model-authored evidence, so it cannot smuggle the same judgment back.
+pub(crate) fn sanitize_report_candidate(
+    mut report: serde_json::Value,
+) -> (serde_json::Value, usize) {
+    let Some(items) = report
+        .get_mut("improvementPlan")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return (report, 0);
+    };
+    let mut dropped = 0;
+    for item in items {
+        let Some(checks) = item
+            .get_mut("selfReview")
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        let before = checks.len();
+        checks.retain(|check| {
+            check
+                .as_str()
+                .and_then(unsupported_observable_judgment)
+                .is_none()
+        });
+        let removed = before - checks.len();
+        dropped += removed;
+        if removed > 0 && checks.is_empty() {
+            checks.push(serde_json::json!(SELF_REVIEW_REPLACEMENT));
+        }
+    }
+    (report, dropped)
+}
+
 /// Reject published-problem names from candidate-facing `summary`,
 /// `codingFeedback`, `communicationFeedback`, and `improvementPlan` fields.
 ///
@@ -420,72 +476,83 @@ fn sort_improvement_plan(report: &mut serde_json::Value) {
 
 fn validate_observable_judgments(value: &serde_json::Value, path: &str, errors: &mut Vec<String>) {
     visit_strings(value, path, &mut |path, text| {
-        let normalized = text
-            .chars()
-            .map(|character| {
-                if character.is_alphanumeric() {
-                    character.to_ascii_lowercase()
-                } else {
-                    ' '
-                }
-            })
-            .collect::<String>()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        let padded = format!(" {normalized} ");
-        const UNSUPPORTED: &[&str] = &[
-            " accent ",
-            " accents ",
-            " dialect ",
-            " dialects ",
-            " typing speed ",
-            " typing pace ",
-            " typed slowly ",
-            " typed quickly ",
-            " type slowly ",
-            " type quickly ",
-            " speech rate ",
-            " filler word ",
-            " filler words ",
-            " disfluency ",
-            " disfluencies ",
-            " eye contact ",
-            " posture ",
-            " body language ",
-            " facial expression ",
-            " facial expressions ",
-            " voice tone ",
-            " vocal tone ",
-            " tone of voice ",
-            " attractiveness ",
-            " physical appearance ",
-            " nervous ",
-            " nervousness ",
-            " nervously ",
-            " anxious ",
-            " anxiety ",
-            " confident demeanor ",
-            " lacked confidence ",
-            " lack of confidence ",
-            " personality ",
-            " introvert ",
-            " extrovert ",
-            " charisma ",
-            " appeared confident ",
-            " appears confident ",
-            " seemed confident ",
-            " looked confident ",
-            " sounded confident ",
-            " come across as confident ",
-            " comes across as confident ",
-        ];
-        if UNSUPPORTED.iter().any(|phrase| padded.contains(phrase)) {
+        if let Some(phrase) = unsupported_observable_judgment(text) {
             errors.push(format!(
-                "{path}: unsupported delivery or personality judgment"
+                "{path}: unsupported delivery or personality judgment ({phrase:?})"
             ));
         }
     });
+}
+
+/// The phrase `text` judges delivery or personality with, if any. Named in the
+/// error because the list is ours and the model cannot see it: told only that
+/// a check is unsupported, a repair swaps "appeared nervous" for "sounded
+/// confident" and fails again.
+fn unsupported_observable_judgment(text: &str) -> Option<&'static str> {
+    let normalized = text
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let padded = format!(" {normalized} ");
+    const UNSUPPORTED: &[&str] = &[
+        " accent ",
+        " accents ",
+        " dialect ",
+        " dialects ",
+        " typing speed ",
+        " typing pace ",
+        " typed slowly ",
+        " typed quickly ",
+        " type slowly ",
+        " type quickly ",
+        " speech rate ",
+        " filler word ",
+        " filler words ",
+        " disfluency ",
+        " disfluencies ",
+        " eye contact ",
+        " posture ",
+        " body language ",
+        " facial expression ",
+        " facial expressions ",
+        " voice tone ",
+        " vocal tone ",
+        " tone of voice ",
+        " attractiveness ",
+        " physical appearance ",
+        " nervous ",
+        " nervousness ",
+        " nervously ",
+        " anxious ",
+        " anxiety ",
+        " confident demeanor ",
+        " lacked confidence ",
+        " lack of confidence ",
+        " personality ",
+        " introvert ",
+        " extrovert ",
+        " charisma ",
+        " appeared confident ",
+        " appears confident ",
+        " seemed confident ",
+        " looked confident ",
+        " sounded confident ",
+        " come across as confident ",
+        " comes across as confident ",
+    ];
+    UNSUPPORTED
+        .iter()
+        .find(|phrase| padded.contains(**phrase))
+        .map(|phrase| phrase.trim())
 }
 
 fn exact_keys(
