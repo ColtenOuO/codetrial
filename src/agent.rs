@@ -33,7 +33,7 @@ pub use prompts::{
     hint_rung_withheld_text, interim_review_prompt, language_choice, log_hint_text, numbered,
     proactive_review, read_editor_text, released_follow_ups, report_prompt, rolling_assessment,
     significant_change, silence_nudge, spoken_language, test_results_reaction,
-    test_setup_error_reaction, time_warning, wrap_up,
+    test_setup_error_reaction, time_warning, unrecorded_earlier_phases, wrap_up,
 };
 pub use report::{
     MAX_SUMMARY_TEXT, fallback_report, final_report, names_published_problem,
@@ -115,8 +115,8 @@ const ROUND_TRANSITION_SKEW: std::time::Duration = std::time::Duration::from_sec
 /// `the_time_warning_threshold_is_the_same_number_on_both_sides`.
 pub const TIME_WARNING_S: u64 = 300;
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 11;
-pub const LIVE_PROMPT_VERSION: u32 = 3;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 12;
+pub const LIVE_PROMPT_VERSION: u32 = 4;
 pub const REPORT_PROMPT_VERSION: u32 = 10;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 2;
@@ -737,6 +737,9 @@ pub struct RuntimeState {
     /// shown. The window it gets is everything after this, so a pause that
     /// arrives with nothing new said costs no call at all.
     pub interim_transcript_lines: usize,
+    /// The earlier steps an evidence reply has already named as open, so each
+    /// is named once; see `unrecorded_earlier_phases`.
+    pub earlier_steps_named: Vec<&'static str>,
     /// The interviewer said the session is over. Read by the room loop, which
     /// ends the interview through the same packet the browser sends, so this is
     /// a request and not the end itself; `ended` is the end itself.
@@ -797,6 +800,7 @@ impl Default for RuntimeState {
             needs_cold_brief: false,
             interim_notes: Vec::new(),
             interim_transcript_lines: 0,
+            earlier_steps_named: Vec::new(),
             end_requested: false,
             ended: false,
         }

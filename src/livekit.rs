@@ -43,9 +43,9 @@ use ::livekit::prelude::{DataPacket, RemoteParticipant, Room, RoomEvent, RoomOpt
 use crate::agent::{
     CANDIDATE_SPEAKER, INTERIM_CONTEXT_NOTES, InterimReviewInput, RuntimeState, SpeakerTurn,
     WATCH_TICK_S, apply_data_event, code_head, framework_evidence_json, framework_progress,
-    interim_review_prompt, parse_participant_metadata, read_editor_text, record_framework_evidence,
-    record_interim_notes, released_follow_ups, transcript_tail, unreviewed_from, with_timer,
-    wrap_up,
+    interim_review_prompt, parse_participant_metadata, phase_id, read_editor_text,
+    record_framework_evidence, record_interim_notes, released_follow_ups, transcript_tail,
+    unrecorded_earlier_phases, unreviewed_from, with_timer, wrap_up,
 };
 use crate::config::AgentConfig;
 use crate::runtime::TOPIC_CONTROL;
@@ -1949,12 +1949,26 @@ pub fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) ->
         // already complete and returns the evidence alone.
         TOOL_RECORD_FRAMEWORK_EVIDENCE => {
             let was_complete = crate::agent::coding_round_complete(state);
+            let shown_before = framework_progress(state);
             match record_framework_evidence(state, &call.args) {
                 Ok(evidence) => {
                     let mut response =
                         serde_json::json!({ "result": framework_evidence_json(&evidence) });
                     if !was_complete && let Some(follow_ups) = released_follow_ups(state) {
                         response["followUps"] = follow_ups.into();
+                    }
+
+                    // Only on the call that first ticks this step: a second
+                    // note on Coding is not a new gap, and asking again on
+                    // every one would push the model toward inventing the
+                    // earlier steps to make the reminder stop.
+                    let phase = phase_id(evidence.phase);
+                    let newly_shown = !shown_before.contains(&phase)
+                        && framework_progress(state).contains(&phase);
+                    if newly_shown
+                        && let Some(reminder) = unrecorded_earlier_phases(state, &evidence)
+                    {
+                        response["earlierSteps"] = reminder.into();
                     }
                     response
                 }
