@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { livekitSource, read } from "./source.js";
+import { functionBody, livekitSource, read } from "./source.js";
 
 import {
   ACTIVE_CONTRACT,
@@ -32,6 +32,7 @@ import {
   replayTimeline,
   responseWindowLabel,
   responseWindows,
+  roomInterviewer,
   sanitizeReport,
   sessionReport,
   testPayload,
@@ -45,6 +46,7 @@ test("provider degradation states distinguish availability and evaluation truth"
     interviewer_reconnecting: [true, false],
     degraded: [false, true], report_generating: [true, false],
     incomplete_report: [false, true], retry_ready: [false, true],
+    report_unreadable: [false, false], report_undrawable: [false, false],
   };
   for (const [kind, [personalized, retry]] of Object.entries(expected)) {
     const state = providerUiState(kind, "provider refused\nsecret");
@@ -392,6 +394,133 @@ test("only the agent may deliver a report, and only on the report topic", () => 
   assert.equal(acceptsReport(topics.report, candidate), false, "candidate cannot publish a report");
   assert.equal(acceptsReport(topics.report, undefined), false, "unknown sender cannot publish a report");
   assert.equal(acceptsReport(topics.code, agentByKind), false, "wrong topic");
+});
+
+test("the interviewer is whoever the page pinned, or else the first agent", () => {
+  const candidate = { kind: "STANDARD", identity: "candidate-abc" };
+  const jim = { kind: "AGENT", identity: "interviewer-abc" };
+  const other = { kind: "AGENT", identity: "interviewer-xyz" };
+
+  assert.equal(roomInterviewer([candidate, jim], ""), jim, "first sight, before an identity is pinned");
+  assert.equal(roomInterviewer([candidate, other, jim], "interviewer-abc"), jim);
+  assert.equal(roomInterviewer([candidate, other], "interviewer-abc"), undefined, "a different agent is not this interview's");
+  assert.equal(roomInterviewer([candidate], "interviewer-abc"), undefined);
+  assert.equal(roomInterviewer([], ""), undefined, "no room lists nobody");
+});
+
+// interview.js cannot run under node, so these read it. What they pin is the
+// question each asks, not the wording around it.
+test("ending the interview waits for a report only while an interviewer is in the room", () => {
+  const end = functionBody(read("web/interview.js"), "endInterview");
+  assert.match(end, /const reportComing = Boolean\(roomInterviewer\(roomParticipants\(\), state\.agentIdentity\)\)/);
+  assert.match(end, /nodes\.forceReport\.hidden = reportComing;/);
+  assert.match(end, /if \(!reportComing\) setTimeout\(showReport, /);
+  assert.doesNotMatch(end, /if \(!?state\.room\)/, "a room outlives the interviewer that left it");
+});
+
+test("a report that cannot be shown puts the ways out back at once", () => {
+  const page = read("web/interview.js");
+  const recovery = functionBody(page, "reportRenderFailed");
+  // The escape wait acts only in phase "ending", so a failure that leaves the
+  // phase at "report" leaves the overlay up with no way out at all.
+  for (const line of [
+    'state.phase = "ending";',
+    "stopEndingEscape();",
+    "nodes.leaveRoom.hidden = false;",
+    "state.reportUnreadable = true;",
+  ]) {
+    assert.ok(recovery.includes(line), line);
+  }
+  // Which of the two failures it is explaining, and whether the exit it offers
+  // is the one that just failed.
+  assert.match(recovery, /providerUiState\(offlineSummary \? "report_unreadable" : "report_undrawable"\)/);
+  assert.match(recovery, /nodes\.forceReport\.hidden = !offlineSummary;/);
+  assert.match(functionBody(page, "showReport"), /reportUnreadable: state\.reportUnreadable/);
+
+  const receive = functionBody(page, "receiveReport");
+  assert.ok(receive.indexOf("rendered = true;") > receive.indexOf("renderReport();"), "marked only once the report is on screen");
+  // A report the candidate is already reading is never taken back: only the
+  // save status throws past that point, and this recovery would replace the
+  // report with an overlay saying it could not be shown.
+  // The offline summary draws through the same `renderReport`, so it is an
+  // exit only from a failure that happened before that ran. Offered after one
+  // from inside it, the click reproduces the throw and the guard around the
+  // second attempt can do no more than say so again.
+  assert.match(receive, /reportRenderFailed\(error, \{ offlineSummary: !renderAttempted \}\)/);
+  const attempted = receive.indexOf("renderAttempted = true;");
+  assert.notEqual(attempted, -1, "which failure it was is decided at the render");
+  assert.ok(attempted < receive.indexOf("renderReport();"), "and marked before it runs");
+
+  const caught = receive.slice(receive.indexOf("} catch (error) {"));
+  assert.match(caught, /if \(rendered\) \{/);
+  const returns = caught.indexOf("return;");
+  assert.notEqual(returns, -1, "an already drawn report ends the catch early");
+  assert.ok(returns < caught.indexOf("reportRenderFailed("), "and ends it before the recovery runs");
+});
+
+test("a report that fails to draw still ends the session it belonged to", () => {
+  const page = read("web/interview.js");
+  const caught = functionBody(page, "receiveReport").slice(functionBody(page, "receiveReport").indexOf("} catch (error) {"));
+  // Only the success path released these, so a throw ahead of the render left
+  // the microphone, the camera and the integrity heartbeat running behind an
+  // overlay saying the report could not be shown.
+  for (const line of ["stopAvatar();", "stopLocalMedia();", "state.room = null;", "state.connected = false;"]) {
+    assert.ok(caught.includes(line), line);
+  }
+  // The interviewer's own ending is recorded behind the parse that threw, so
+  // the replay would stop mid-interview, and the button the forced phase puts
+  // beyond `endInterview` would stay enabled and inert.
+  assert.match(caught, /if \(!endRecorded && state\.phase === "live"\)/);
+  assert.match(caught, /recordReplay\("lifecycle", \{ state: "ended"/);
+  assert.match(caught, /nodes\.end\.disabled = true;/);
+});
+
+test("the offline summary is not offered as the exit from its own failure", () => {
+  const show = functionBody(read("web/interview.js"), "showReport");
+  // `renderReport` unhides the report frame before the part most likely to
+  // throw, so an unguarded second failure lands the candidate on a half drawn
+  // report with no overlay and nothing to press.
+  const guarded = show.indexOf("try {");
+  assert.notEqual(guarded, -1, "the offline render is guarded too");
+  assert.ok(guarded < show.indexOf("renderReport();"), "and guarded before it runs, not after");
+  assert.match(show, /reportRenderFailed\(error, \{ offlineSummary: false \}\)/);
+});
+
+test("an interviewer that leaves mid-wait ends the wait it left behind", () => {
+  const update = functionBody(read("web/interview.js"), "updateAgentState");
+  // `endInterview` asks once whether a report is coming. The agent leaves the
+  // room right after publishing one, and issue 77 is the case where it leaves
+  // without publishing at all.
+  const waiting = update.indexOf('state.phase === "ending"');
+  assert.notEqual(waiting, -1, "a candidate already waiting is the case this closes");
+  const closing = update.slice(waiting);
+  for (const line of ["stopEndingEscape();", "nodes.leaveRoom.hidden = false;", "nodes.forceReport.hidden = false;"]) {
+    assert.ok(closing.includes(line), line);
+  }
+  // Not at once, though: the agent publishes and then leaves, so the moment it
+  // goes is the moment its report may be one packet away, and the offline
+  // summary offered inside that window replaces a real evaluation with an
+  // unscored one and disconnects the room that was about to deliver it.
+  const armed = closing.indexOf("setTimeout(");
+  assert.notEqual(armed, -1, "the exits wait out a report already in flight");
+  assert.ok(closing.includes("REPORT_DELIVERY_GRACE_MS"), "and wait exactly that long");
+  assert.ok(armed < closing.indexOf("nodes.forceReport.hidden = false;"), "the offline exit is inside the wait");
+  // What lands in the grace has already spoken for itself.
+  assert.match(closing, /state\.phase !== "ending" \|\| state\.reportUnreadable/);
+});
+
+test("a report that arrives takes back the overlay's promises of one", () => {
+  const page = read("web/interview.js");
+  // Both timers speak for a report still on its way and both act on phase
+  // "ending", which the recovery above restores: left armed, they overwrite
+  // what went wrong with "preparing your report" and then with an offer to
+  // retry a provider that did its part.
+  assert.match(functionBody(page, "endInterview"), /endingEscape = \[setTimeout\(/);
+  const receive = functionBody(page, "receiveReport");
+  assert.ok(
+    receive.includes("stopEndingEscape();") && receive.indexOf("stopEndingEscape();") < receive.indexOf("try {"),
+    "the wait ends when the packet lands, before anything can throw",
+  );
 });
 
 test("escapeHtml neutralizes every markup character", () => {
@@ -874,6 +1003,15 @@ test("a session that reached an interviewer is never scored by the browser", () 
     sessionReport({ joinedRoom: true, passed: 0, total: 0, candidateTurns: 0 }).summary,
     /interviewer never returned a report/,
   );
+
+  // A report that arrived and could not be drawn is not a report that never
+  // came, and this is the sentence a candidate quotes when asking for the
+  // session to be looked at.
+  const unreadable = sessionReport({ ...scored, joinedRoom: true, reportUnreadable: true });
+  assert.equal(unreadable.incomplete, true);
+  assert.equal(unreadable.decision, undefined);
+  assert.doesNotMatch(unreadable.summary, /never returned a report/);
+  assert.match(unreadable.summary, /could not display it/);
 
   const offline = sessionReport(scored);
   assert.equal(offline.incomplete, true);
