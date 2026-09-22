@@ -15,13 +15,8 @@
 // before scripts/test.sh, so a skip there means the install did nothing.
 import { test, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
-import { readFileSync, existsSync, statSync } from "node:fs";
-import { join } from "node:path";
 
-import { functionBody, launchChromium, read, root } from "./source.js";
-
-const web = join(root, "web");
+import { functionBody, launchChromium, read, startStaticServer } from "./source.js";
 
 let browser = null;
 let server = null;
@@ -46,64 +41,56 @@ let holdReports = null;
 let holdLogin = null;
 let deleteRequests = 0;
 
-const type = (file) =>
-  file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : "text/html";
-
 before(async () => {
   browser = await launchChromium();
   if (!browser) return;
 
-  server = createServer((request, response) => {
-    const url = new URL(request.url, "http://lobby.invalid");
+  ({ server, base } = await startStaticServer({
     // Answered at once. A blanket delay here was about five of this file's
     // eleven seconds, paid twice per page load, and the two tests that need to
     // act while a request is in flight hold that request open instead, which is
     // a state rather than a race they hope to win.
-    const json = (body) => {
-      response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify(body));
-    };
+    handle: async (request, response, url) => {
+      const json = (body) => {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify(body));
+        return true;
+      };
 
-    if (request.method === "DELETE" && url.pathname === "/api/reports") {
-      deleteRequests += 1;
-    }
-
-    if (failing.has(url.pathname)) {
-      response.statusCode = 500;
-      return response.end("nope");
-    }
-    if (url.pathname === "/api/session") return json(session);
-    if (url.pathname === "/api/reports") {
-      if (request.method === "DELETE") {
-        const deleted = reports.length;
-        reports = [];
-        return json({ deleted });
+      if (request.method === "DELETE" && url.pathname === "/api/reports") {
+        deleteRequests += 1;
       }
-      return holdReports ? holdReports.then(() => json({ reports })) : json({ reports });
-    }
-    if (url.pathname === "/api/login") {
-      session = { signedIn: true, user: { login: "candidate" } };
-      return holdLogin ? holdLogin.then(() => json({ ok: true })) : json({ ok: true });
-    }
-    // Only somewhere for the start button to land, so the query string it built
-    // can be read back off the URL.
-    if (url.pathname === "/interview") {
-      response.setHeader("content-type", "text/html");
-      return response.end("<h1>interview</h1>");
-    }
 
-    const file = join(web, url.pathname === "/" ? "index.html" : url.pathname);
-    // `startsWith` before touching the path: the URL comes from the page, but a
-    // stub that will serve `/../../etc/passwd` is one somebody copies.
-    if (!file.startsWith(web) || !existsSync(file) || statSync(file).isDirectory()) {
-      response.statusCode = 404;
-      return response.end("not found");
-    }
-    response.setHeader("content-type", type(file));
-    response.end(readFileSync(file));
-  });
-  await new Promise((listening) => server.listen(0, "127.0.0.1", listening));
-  base = `http://127.0.0.1:${server.address().port}`;
+      if (failing.has(url.pathname)) {
+        response.statusCode = 500;
+        response.end("nope");
+        return true;
+      }
+      if (url.pathname === "/api/session") return json(session);
+      if (url.pathname === "/api/reports") {
+        if (request.method === "DELETE") {
+          const deleted = reports.length;
+          reports = [];
+          return json({ deleted });
+        }
+        if (holdReports) await holdReports;
+        return json({ reports });
+      }
+      if (url.pathname === "/api/login") {
+        session = { signedIn: true, user: { login: "candidate" } };
+        if (holdLogin) await holdLogin;
+        return json({ ok: true });
+      }
+      // Only somewhere for the start button to land, so the query string it
+      // built can be read back off the URL.
+      if (url.pathname === "/interview") {
+        response.setHeader("content-type", "text/html");
+        response.end("<h1>interview</h1>");
+        return true;
+      }
+      return false;
+    },
+  }));
 });
 
 /// Reset here rather than at the top of each test. The per-test assignments

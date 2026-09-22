@@ -31,12 +31,14 @@ function lastCodeCharacter(line, language) {
   return last;
 }
 
+const BRACKET_PAIRS = { "(": ")", "{": "}", "[": "]" };
+
 export function indentNewline(value, start, end, language) {
   const lineStart = start === 0 ? 0 : value.lastIndexOf("\n", start - 1) + 1;
   const before = value.slice(lineStart, start);
   const indentation = before.match(/^[ \t]*/)[0];
   const opener = lastCodeCharacter(before, language);
-  const closer = { "{": "}", "[": "]", "(": ")" }[opener];
+  const closer = BRACKET_PAIRS[opener];
   const nested = Boolean(closer) || (language === "python" && opener === ":");
   const innerIndent = indentation + (nested ? INDENT : "");
   let insertion = `\n${innerIndent}`;
@@ -53,6 +55,59 @@ export function indentNewline(value, start, end, language) {
     end += trailingSpace;
   }
   return { value: value.slice(0, start) + insertion + value.slice(end), start: caret, end: caret };
+}
+
+const BRACKET_CLOSERS = new Set(Object.values(BRACKET_PAIRS));
+
+export function isBracketOpenerKeystroke(event) {
+  return event.inputType === "insertText" && Object.hasOwn(BRACKET_PAIRS, event.data);
+}
+
+// Typing an opener around a selection wraps it, the way most editors do;
+// typing it at a bare caret inserts an empty pair and steps inside so the
+// candidate doesn't have to type the closer themselves.
+export function insertBracketPair(value, start, end, opener) {
+  const closer = BRACKET_PAIRS[opener];
+  const inner = value.slice(start, end);
+  const insertion = `${opener}${inner}${closer}`;
+  const caret = start + opener.length + inner.length;
+  return {
+    value: value.slice(0, start) + insertion + value.slice(end),
+    start: start === end ? caret : start + opener.length,
+    end: caret,
+  };
+}
+
+export function isBracketCloserKeystroke(event) {
+  return event.inputType === "insertText" && BRACKET_CLOSERS.has(event.data);
+}
+
+// The other half of typing over an inserted pair: closing it out of habit
+// should step past the closer already there rather than duplicate it. Not
+// applicable, so the caller falls through to native insertion, unless the
+// caret is collapsed right before that same character.
+export function typeOverCloser(value, start, end, closer) {
+  if (!BRACKET_CLOSERS.has(closer)) return null;
+  if (start !== end || value[start] !== closer) return null;
+  return { value, start: start + 1, end: start + 1 };
+}
+
+// Same content-check-only shape as the bracket predicates above, and for the
+// same reason: interview.js's reentrancy flag is what keeps this from
+// recursing into deleteEmptyPair while its own execCommand("delete") is
+// still running, not isTrusted.
+export function isBackspaceKeystroke(event) {
+  return event.inputType === "deleteContentBackward";
+}
+
+// The type-over's counterpart: Backspace right after an auto-inserted empty
+// pair should remove both characters in one stroke instead of stranding the
+// closer.
+export function deleteEmptyPair(value, start, end) {
+  if (start !== end || start === 0) return null;
+  const closer = BRACKET_PAIRS[value[start - 1]];
+  if (!closer || value[start] !== closer) return null;
+  return { value: value.slice(0, start - 1) + value.slice(start + 1), start: start - 1, end: start - 1 };
 }
 
 export function indentSelection(value, start, end, outdent = false) {

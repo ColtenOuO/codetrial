@@ -1,54 +1,16 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { extname, join } from "node:path";
 
-import { launchChromium, root } from "./source.js";
+import { DEFAULT_RUNTIME_CONFIG, launchChromium, startStaticServer } from "./source.js";
 
-const web = join(root, "web");
 let browser = null;
 let server = null;
 let base = "";
 
-// Grown once per language the interview page pulls in; a table says which
-// without a fifth nested conditional.
-const contentTypes = {
-  ".js": "text/javascript",
-  ".html": "text/html",
-  ".css": "text/css",
-  ".wasm": "application/wasm",
-};
-
 before(async () => {
   browser = await launchChromium();
   if (!browser) return;
-  server = createServer((request, response) => {
-    const path = new URL(request.url, "http://candidate.invalid").pathname;
-    // Served by the Rust server in the real app, so there is no file for it
-    // here. `runtime_config_handler` in src/web/assets.rs is what this stands
-    // in for, and tests/web.rs pins the real one.
-    if (path === "/runtime-config.js") {
-      response.setHeader("content-type", "text/javascript");
-      response.end(`globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = false;
-globalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = "";
-globalThis.CODETRIAL_RECORDING_ENABLED = false;
-globalThis.CODETRIAL_CONSENT_VERSION = "";
-globalThis.CODETRIAL_REPLAY_VERSION = 1;
-`);
-      return;
-    }
-    const file = join(web, path === "/" ? "index.html" : path);
-    if (!file.startsWith(web) || !existsSync(file) || statSync(file).isDirectory()) {
-      response.statusCode = 404;
-      response.end("not found");
-      return;
-    }
-    response.setHeader("content-type", contentTypes[extname(file)] ?? "application/json");
-    response.end(readFileSync(file));
-  });
-  await new Promise((listening) => server.listen(0, "127.0.0.1", listening));
-  base = `http://127.0.0.1:${server.address().port}`;
+  ({ server, base } = await startStaticServer({ runtimeConfig: DEFAULT_RUNTIME_CONFIG }));
 });
 
 after(async () => {

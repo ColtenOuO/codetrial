@@ -8,9 +8,10 @@
 // assertions against it passed against unrelated code. `web/interview.js`
 // declares fifteen `async function`s, so that was one edit away from happening.
 
-import { readFileSync, readdirSync } from "node:fs";
+import { createServer } from "node:http";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, extname, join, sep } from "node:path";
 
 export const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -162,6 +163,63 @@ export async function launchChromium() {
     }
     return null;
   }
+}
+
+/// What `/runtime-config.js` answers with when a caller passes none of its
+/// own. Stands in for `runtime_config_handler` in `src/web/assets.rs`, which
+/// `tests/web.rs` pins against the real server; the interview page fetches
+/// this before `bindEvents` runs, so a caller that loads it with no value at
+/// all is a fetch racing a 404 rather than a stub.
+export const DEFAULT_RUNTIME_CONFIG = `globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = false;
+globalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = "";
+globalThis.CODETRIAL_RECORDING_ENABLED = false;
+globalThis.CODETRIAL_CONSENT_VERSION = "";
+globalThis.CODETRIAL_REPLAY_VERSION = 1;
+`;
+
+const STATIC_CONTENT_TYPES = {
+  ".js": "text/javascript",
+  ".html": "text/html",
+  ".css": "text/css",
+  ".wasm": "application/wasm",
+};
+
+/// A static file server over `web/`, the way the browser sees it once
+/// `tests/browser/dom.js`'s stub is out of reach for a page. Shared rather
+/// than re-written per file: this same handful of lines had already been
+/// copied into two browser test files -- lobby.test.js for its own static
+/// fallback, candidate-cases.test.js whole -- before a third arrived needing
+/// it too, and the `/runtime-config.js` stub in particular is a copy of
+/// `runtime_config_handler` that nothing keeps in step with the original
+/// when it changes.
+///
+/// `handle`, when given, runs first and may answer the request itself --
+/// returning a truthy value once it has called something on `response` -- for
+/// routes static serving cannot, such as an API a page under test fetches.
+/// Anything it declines falls through to `web/` on disk. `runtimeConfig`
+/// answers `/runtime-config.js`; omit it for a page that never fetches that
+/// file, such as the lobby.
+export async function startStaticServer({ handle, runtimeConfig } = {}) {
+  const web = join(root, "web");
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url, "http://browser-test.invalid");
+    if (handle && (await handle(request, response, url))) return;
+    if (runtimeConfig !== undefined && url.pathname === "/runtime-config.js") {
+      response.setHeader("content-type", "text/javascript");
+      response.end(runtimeConfig);
+      return;
+    }
+    const file = join(web, url.pathname === "/" ? "index.html" : url.pathname);
+    if (!file.startsWith(web + sep) || !existsSync(file) || statSync(file).isDirectory()) {
+      response.statusCode = 404;
+      response.end("not found");
+      return;
+    }
+    response.setHeader("content-type", STATIC_CONTENT_TYPES[extname(file)] ?? "application/json");
+    response.end(readFileSync(file));
+  });
+  await new Promise((listening) => server.listen(0, "127.0.0.1", listening));
+  return { server, base: `http://127.0.0.1:${server.address().port}` };
 }
 
 export function captures(source, pattern) {
