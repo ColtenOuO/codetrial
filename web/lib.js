@@ -195,6 +195,22 @@ export function isAgent(participant) {
   return Boolean(participant) && (participant.kind === "AGENT" || participant.permissions?.agent || participant.identity?.startsWith("interviewer-"));
 }
 
+/// The interviewer among a room's remote participants, or undefined.
+///
+/// Once the page has pinned an identity, only that participant counts: a second
+/// agent joining the room is not the one this interview was talking to, and it
+/// holds none of the session a report is written from.
+///
+/// Two readers, and they have to agree. The agent pill asks it to say who is
+/// here, and ending the interview asks it whether anyone is left to send a
+/// report. The second used to ask whether the page still had a room, which
+/// stays true after the agent leaves, so the page waited for a report no one
+/// was going to send.
+export function roomInterviewer(participants, agentIdentity) {
+  return participants.find((participant) => participant.identity === agentIdentity)
+    || (!agentIdentity ? participants.find(isAgent) : undefined);
+}
+
 // Only the interviewer agent may end the session. Every other participant holds
 // `canPublishData`, so an unchecked report topic would let a peer drive the
 // candidate's report UI.
@@ -881,7 +897,21 @@ export function countdown(endsAt, now) {
 /// it to localStorage and POSTed it to `/api/reports`. Whether an interviewer
 /// was ever present is a different fact from whether the connection survived,
 /// and only the first one decides this.
-export function sessionReport({ joinedRoom, passed, total, candidateTurns }) {
+export function sessionReport({ joinedRoom, passed, total, candidateTurns, reportUnreadable = false }) {
+  // Ahead of `joinedRoom`, which this case also satisfies while contradicting
+  // it: the interviewer did return a report, and only this page's failure to
+  // show it stands between the candidate and their evaluation. Told as "the
+  // interviewer never returned a report", the one sentence the candidate can
+  // quote when asking for the session to be looked at names the wrong side.
+  if (reportUnreadable) {
+    return {
+      incomplete: true,
+      summary:
+        "The interviewer returned a report and this page could not display it. What follows is only what this page recorded, so the interviewer's scores and verdict are not part of it.",
+      hintsUsed: 0,
+    };
+  }
+
   if (joinedRoom) {
     return {
       incomplete: true,
@@ -968,6 +998,10 @@ export function providerUiState(kind, detail = "") {
     interviewer_reconnecting: { label: "Reconnecting", message: "The interviewer is reconnecting and cannot hear you for a moment. Keep working; nothing is lost.", personalized: true, retry: false },
     degraded: { label: "Offline", message: `${reason} You can still work the problem, but it will not create a personalized evaluation.`, personalized: false, retry: true },
     report_generating: { label: "Preparing report", message: "Preparing your personalized report. A slow grader can take a couple of minutes.", personalized: true, retry: false },
+    report_unreadable: { label: "Report unavailable", message: "The interviewer sent a report, but this page could not display it, and reloading will not bring it back. The offline summary shows what this page recorded, and leaving the room is safe.", personalized: false, retry: false },
+    // The offline summary is the other half of `report_unreadable`, so where
+    // that is what failed there is nothing left to offer but the door.
+    report_undrawable: { label: "Report unavailable", message: "This page could not display the report or the offline summary of what it recorded. Nothing further is coming, and leaving the room is safe.", personalized: false, retry: false },
     incomplete_report: { label: "Incomplete report", message: "The provider could not produce a valid personalized evaluation. No scores or verdict were created.", personalized: false, retry: true },
     retry_ready: { label: "Retry available", message: "The report is still unavailable. Leave safely, then retry the interview when the provider recovers.", personalized: false, retry: true },
   };
