@@ -296,6 +296,8 @@ TOOLS
   `read_editor` first and record them only when it shows that code. A plan the
   candidate describes is Algorithm, and the call is refused while the editor
   holds only the starter.
+  The candidate's step list is ticked from these calls alone, so when you move
+  to the next step, first record the step the candidate just finished.
   This is the rolling evaluation the final report is written from: record every
   meaningful phase observation as it happens, including a concrete strength or
   gap and what the candidate said, coded, or tested. Record the smallest grounded
@@ -451,6 +453,56 @@ fn follow_ups_text(follow_ups: &[&str]) -> String {
 pub fn released_follow_ups(state: &RuntimeState) -> Option<String> {
     (crate::agent::coding_round_complete(state) && !state.follow_ups.is_empty())
         .then(|| follow_ups_text(state.follow_ups))
+}
+
+/// The earlier steps of the same framework that have no evidence yet, named
+/// back to the interviewer when it banks a later one, or none.
+///
+/// The candidate's checklist is ticked from evidence alone, and the spoken
+/// steps have nothing that makes the model call the tool while it is talking:
+/// Coding is reached through `read_editor`, Repeat through nothing. So the list
+/// showed Coding ticked with Repeat, Example and Algorithm still open until the
+/// model got round to them, sometimes at the end. Asked here, in the reply to
+/// the call that exposed the gap, the model catches up in the same turn. It is
+/// told to record only what the candidate did, because an open step can also be
+/// one the candidate skipped, and that one has to stay open.
+///
+/// Any row closes a step, a skip included. `framework_progress` leaves skips
+/// out because they tick nothing, but a step the five-minute warning closed out
+/// as skipped is not missing. Each step is named once for the same reason the
+/// reply tells the model to record nothing for a skip: a step the candidate
+/// jumped over stays open, and naming it again on every later step leaves
+/// inventing the evidence as the only way to make it stop.
+pub fn unrecorded_earlier_phases(
+    state: &mut RuntimeState,
+    evidence: &FrameworkEvidence,
+) -> Option<String> {
+    let phase = phase_id(evidence.phase);
+    let ids: &[&'static str] = if REACTO_PHASE_IDS.contains(&phase) {
+        &REACTO_PHASE_IDS
+    } else {
+        &STAR_PHASE_IDS
+    };
+    let at = ids.iter().position(|id| *id == phase)?;
+    let missing = ids[..at]
+        .iter()
+        .filter(|id| {
+            !state
+                .framework_evidence
+                .iter()
+                .any(|item| phase_id(item.phase) == **id)
+        })
+        .filter(|id| !state.earlier_steps_named.contains(id))
+        .copied()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return None;
+    }
+    state.earlier_steps_named.extend(&missing);
+    Some(format!(
+        "No evidence is recorded yet for the earlier step(s): {}. If the candidate already did one of them, record it now, before you speak, so the candidate's step list stays in order. If they skipped it, record nothing.",
+        missing.join(", ")
+    ))
 }
 
 /// Spoken when the interview lost its Gemini socket and could not resume onto

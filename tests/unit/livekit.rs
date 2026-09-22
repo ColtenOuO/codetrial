@@ -868,6 +868,80 @@ fn end_interview_allows_a_completed_coding_only_plan() {
     assert!(state.end_requested);
 }
 
+/// The reply that first ticks a later step names the earlier ones still open,
+/// each once, and never names a step that already has a row, a skip included.
+#[test]
+fn evidence_reply_names_the_earlier_steps_still_open() {
+    let mut state = RuntimeState {
+        code: "def solve(nums):\n    return sorted(nums)\n".to_string(),
+        ..RuntimeState::default()
+    };
+    let mut record = |phase: &str, kind: &str, source: &str, summary: &str| {
+        execute_tool_call(
+            &mut state,
+            &GeminiFunctionCall {
+                id: "1".to_string(),
+                name: TOOL_RECORD_FRAMEWORK_EVIDENCE.to_string(),
+                args: serde_json::json!({
+                    "phase": phase, "source": source, "kind": kind,
+                    "confidence": 90, "summary": summary,
+                }),
+            },
+        )
+    };
+
+    let first = record("repeat", "observed", "candidate_speech", "Restated it.");
+    assert!(first["result"].is_object());
+    assert!(
+        first.get("earlierSteps").is_none(),
+        "nothing comes before Repeat"
+    );
+
+    let coding = record("coding", "observed", "editor_snapshot", "Wrote a sort.");
+    let reminder = coding["earlierSteps"]
+        .as_str()
+        .expect("Coding skipped two steps");
+    assert!(reminder.contains("example, algorithm"), "{reminder}");
+    assert!(
+        !reminder.contains("repeat"),
+        "Repeat is already ticked: {reminder}"
+    );
+    assert!(reminder.contains("If they skipped it, record nothing"));
+
+    // Coding is already ticked, so a second note on it is not a new gap.
+    let again = record("coding", "observed", "editor_snapshot", "Added a guard.");
+    assert!(again.get("earlierSteps").is_none());
+
+    // Example comes before Algorithm, so the Algorithm gap is not its to name.
+    let example = record("example", "observed", "candidate_speech", "Walked [1].");
+    assert!(example.get("earlierSteps").is_none());
+
+    // Algorithm is still open, but Coding already named it: the candidate may
+    // have skipped it, and asking again leaves inventing it as the only answer.
+    let test = record("test", "observed", "candidate_speech", "Predicted [].");
+    assert!(test.get("earlierSteps").is_none(), "{test}");
+
+    // A skip ticks nothing, so it has no gap to report, even with Situation and
+    // Task open and never named.
+    let action = record("action", "skipped", "session_timing", "Out of time.");
+    assert!(action.get("earlierSteps").is_none(), "{action}");
+
+    // A step closed out as skipped has a row, so it is not missing.
+    let situation = record("situation", "skipped", "session_timing", "Out of time.");
+    assert!(situation.get("earlierSteps").is_none());
+
+    // STAR is its own list: a REACTO gap is not named on a STAR step. Task is
+    // still named here, because the skip above named nothing.
+    let result = record("result", "observed", "candidate_speech", "Shipped it.");
+    let star = result["earlierSteps"]
+        .as_str()
+        .expect("STAR steps are open");
+    assert!(star.contains(": task."), "{star}");
+    assert!(!star.contains("situation"), "{star}");
+    assert!(!star.contains("action"), "{star}");
+    assert!(!star.contains("algorithm"), "{star}");
+}
+
 #[test]
 fn execute_tool_call_reports_unknown_tools() {
     let mut state = RuntimeState::default();
