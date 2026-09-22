@@ -30,7 +30,7 @@ fn config_accepts_current_env_names() {
     assert_eq!(config.livekit_url, "wss://example.livekit.cloud");
     assert_eq!(config.livekit_api_key, "key");
     assert_eq!(config.livekit_api_secret, "secret");
-    assert_eq!(config.google_api_key, "google");
+    assert_eq!(config.google_api_keys, ["google"]);
     assert_eq!(config.gemini_live_model, "live-model");
     assert_eq!(config.gemini_report_model, "report-model");
     assert_eq!(config.gemini_voice, "Voice");
@@ -601,7 +601,7 @@ fn the_operator_chooses_which_provider_leads_the_rotation() {
         url: format!("wss://{id}.example"),
         api_key: "k".to_string(),
         api_secret: "s".to_string(),
-        google_api_key: String::new(),
+        google_api_keys: Vec::new(),
     };
     let pool = || {
         vec![
@@ -673,7 +673,7 @@ fn a_pool_says_how_many_projects_it_actually_spreads_over() {
         url: format!("wss://{host}.livekit.cloud"),
         api_key: "k".to_string(),
         api_secret: "s".to_string(),
-        google_api_key: String::new(),
+        google_api_keys: Vec::new(),
     };
 
     let (summary, warnings) = pool_summary(&[
@@ -714,7 +714,7 @@ fn a_pool_says_how_many_projects_it_actually_spreads_over() {
         url: "wss://one.livekit.cloud".to_string(),
         api_key: "APIsentinelkey".to_string(),
         api_secret: "sentinelsecretvalue".to_string(),
-        google_api_key: "googlesentinelkey".to_string(),
+        google_api_keys: vec!["googlesentinelkey".to_string()],
     }]);
     for secret in ["APIsentinelkey", "sentinelsecretvalue", "googlesentinelkey"] {
         assert!(!summary.contains(secret), "{secret} leaked into: {summary}");
@@ -932,7 +932,7 @@ fn provider(id: &str, url: &str) -> codetrial::config::Provider {
         url: url.to_string(),
         api_key: "key".to_string(),
         api_secret: "secret".to_string(),
-        google_api_key: "google".to_string(),
+        google_api_keys: vec!["google".to_string()],
     }
 }
 
@@ -987,7 +987,7 @@ fn a_provider_debug_does_not_print_its_secret() {
         "redaction",
         &[(
             "codetrial.env.eu",
-            "LIVEKIT_URL=wss://frankfurt.example\nLIVEKIT_API_KEY=livekit-key\nLIVEKIT_API_SECRET=hunter2\nGOOGLE_API_KEY=gsecret\n",
+            "LIVEKIT_URL=wss://frankfurt.example\nLIVEKIT_API_KEY=livekit-key\nLIVEKIT_API_SECRET=hunter2\nGOOGLE_API_KEY=gsecret\nGOOGLE_API_KEYS=list-secret-one,list-secret-two\n",
         )],
     );
     let (providers, _) = codetrial::config::discover_providers(&dir, false);
@@ -996,6 +996,11 @@ fn a_provider_debug_does_not_print_its_secret() {
     assert!(!rendered.contains("livekit-key"), "{rendered}");
     assert!(!rendered.contains("hunter2"), "{rendered}");
     assert!(!rendered.contains("gsecret"), "{rendered}");
+    assert!(!rendered.contains("list-secret"), "{rendered}");
+    assert_eq!(
+        providers[0].google_api_keys,
+        ["list-secret-one", "list-secret-two"]
+    );
 
     // The id and URL are what makes the line useful, and neither is a
     // credential. Named against a host that is not the id: this used to look
@@ -1003,6 +1008,55 @@ fn a_provider_debug_does_not_print_its_secret() {
     // not `Debug` printed the id at all.
     assert!(rendered.contains("eu"), "{rendered}");
     assert!(rendered.contains("frankfurt.example"), "{rendered}");
+}
+
+/// The file's Gemini credential replaces the environment's under either name:
+/// an inherited list outranking the file's key sent requests, and the bill,
+/// to a project nobody configured for this deployment.
+#[test]
+fn a_config_file_credential_replaces_both_environment_names() {
+    let base = [
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "key"),
+        ("LIVEKIT_API_SECRET", "secret"),
+    ];
+    let merged = |env: &[(&str, &str)], file: &[(&str, &str)]| {
+        let mut values = base
+            .iter()
+            .chain(env)
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect::<BTreeMap<_, _>>();
+        codetrial::config::apply_config_file(
+            &mut values,
+            file.iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+        );
+        load_from_pairs(values).unwrap()
+    };
+
+    let config = merged(
+        &[("GOOGLE_API_KEYS", "env-a,env-b")],
+        &[("GOOGLE_API_KEY", "file-key")],
+    );
+    assert_eq!(config.google_api_keys, ["file-key"]);
+
+    let config = merged(
+        &[("GOOGLE_API_KEY", "env-key")],
+        &[("GOOGLE_API_KEYS", "file-a,file-b")],
+    );
+    assert_eq!(config.google_api_keys, ["file-a", "file-b"]);
+
+    // A file without either name leaves the environment's credential alone.
+    let config = merged(
+        &[("GOOGLE_API_KEYS", "env-a,env-b")],
+        &[("GEMINI_VOICE", "Puck")],
+    );
+    assert_eq!(config.google_api_keys, ["env-a", "env-b"]);
+
+    // Nor does a blank line for the other name, which is no credential.
+    let config = merged(&[("GOOGLE_API_KEY", "env-key")], &[("GOOGLE_API_KEYS", "")]);
+    assert_eq!(config.google_api_keys, ["env-key"]);
 }
 
 #[test]
@@ -1019,7 +1073,7 @@ fn loading_config_does_not_depend_on_the_current_directory() {
 
     assert_eq!(config.pool.providers.len(), 1);
     assert_eq!(config.pool.providers[0].id, "primary");
-    assert_eq!(config.pool.providers[0].google_api_key, "google");
+    assert_eq!(config.pool.providers[0].google_api_keys, ["google"]);
 }
 
 /// The recording block, which is off in every deployment until an operator
@@ -1045,7 +1099,7 @@ mod recording {
                 url: "wss://project.livekit.cloud".to_string(),
                 api_key: "devkey".to_string(),
                 api_secret: "devsecret".to_string(),
-                google_api_key: "google".to_string(),
+                google_api_keys: vec!["google".to_string()],
             }],
         }
     }
@@ -1280,7 +1334,7 @@ mod recording {
                 url: "wss://[2001:db8::1]".to_string(),
                 api_key: "devkey".to_string(),
                 api_secret: "devsecret".to_string(),
-                google_api_key: "google".to_string(),
+                google_api_keys: vec!["google".to_string()],
             }],
         };
         let override_at = |url: &'static str| {
@@ -1349,7 +1403,7 @@ mod recording {
                 url: "ws://localhost".to_string(),
                 api_key: "devkey".to_string(),
                 api_secret: "devsecret".to_string(),
-                google_api_key: "google".to_string(),
+                google_api_keys: vec!["google".to_string()],
             }],
         };
         assert_eq!(matched(&local, "http://localhost:80"), Ok(true));

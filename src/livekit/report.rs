@@ -13,7 +13,7 @@ use crate::agent::{
     ReportPromptInput, RuntimeState, final_report, format_test_run, framework_evidence_json,
     interview_contract_json, report_prompt, rolling_assessment, transcript_for_report,
 };
-use crate::gemini::{generate_report, redact_api_key};
+use crate::gemini::{GeminiKeys, generate_report_with_keys};
 use crate::runtime::{RuntimeBootstrap, TOPIC_REPORT};
 
 use super::{REPORT_TIMEOUT, browser_packet};
@@ -24,7 +24,7 @@ pub(super) async fn publish_report(
     state: &RuntimeState,
     reason: &str,
     elapsed_min: f64,
-    api_key: &str,
+    api_key: &GeminiKeys,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     room.local_participant()
         .publish_data(report_packet(boot, state, reason, elapsed_min, api_key).await?)
@@ -37,11 +37,11 @@ async fn report_packet(
     state: &RuntimeState,
     reason: &str,
     elapsed_min: f64,
-    api_key: &str,
+    api_key: &GeminiKeys,
 ) -> Result<DataPacket, Box<dyn std::error::Error + Send + Sync>> {
     let mut report = match tokio::time::timeout(
         REPORT_TIMEOUT,
-        generate_report(
+        generate_report_with_keys(
             api_key,
             boot.report_model,
             &report_prompt_text(boot, state, elapsed_min),
@@ -264,9 +264,9 @@ fn report_error_note(
     state: &RuntimeState,
     reason: &str,
     error: &(dyn std::error::Error + 'static),
-    api_key: &str,
+    api_key: &GeminiKeys,
 ) -> String {
-    let detail = redact_api_key(&error.to_string(), api_key);
+    let detail = api_key.redact(&error.to_string());
     format!(
         "Rust LiveKit runner ended ({reason}) but Gemini report generation failed for model {} on {}. Final editor state: {} bytes of {}. Error: {detail}",
         boot.report_model,

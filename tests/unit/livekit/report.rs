@@ -133,7 +133,7 @@ fn report_error_note_never_carries_the_google_api_key() {
         &RuntimeState::default(),
         "candidate_ended",
         &leaky,
-        "AQ.Ab8RN6secret",
+        &GeminiKeys::single("AQ.Ab8RN6secret"),
     );
 
     assert!(!note.contains("AQ.Ab8RN6secret"), "{note}");
@@ -180,7 +180,7 @@ fn report_helpers_use_report_topic_prompt_state_and_error_note() {
             &state,
             "candidate_ended",
             &error,
-            "google",
+            &GeminiKeys::single("google"),
         )),
         boot.problem,
     );

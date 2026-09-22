@@ -17,6 +17,13 @@ use crate::runtime::{
     TOOL_RECORD_FRAMEWORK_EVIDENCE,
 };
 
+mod credentials;
+pub use credentials::GeminiKeys;
+pub(crate) use credentials::exhausted_until;
+use credentials::{
+    ApiFailure, ApiSurface, CredentialFailure, credential_failure, failure_from_reason,
+};
+
 const LIVE_WEBSOCKET_ENDPOINT: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 const SETUP_TIMEOUT: Duration = Duration::from_secs(15);
 /// Bounds the socket itself, where `SETUP_TIMEOUT` bounds the exchange over it.
@@ -25,6 +32,13 @@ const SETUP_TIMEOUT: Duration = Duration::from_secs(15);
 /// candidate leaves during a stalled reconnect would not notice they had gone,
 /// and its own deadline would not fire either.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// An interview's first open, retries included, gets no longer than the one
+/// attempt it had before failover gave it retries. The candidate is in the
+/// room by then and the tab already shows a listening interviewer, so an
+/// unreachable Gemini has to end the room at the pace it always did, not after
+/// the whole restart budget of connect and setup timeouts. Retries that fail
+/// fast, a 503 or a rejected key, still fit inside it.
+pub(crate) const FIRST_OPEN_LIMIT: Duration = CONNECT_TIMEOUT.saturating_add(SETUP_TIMEOUT);
 /// Per transport attempt. Measured against the live report model, a call for a
 /// full-length interview lands in six seconds at the median and past twelve at
 /// the tail, so the eight seconds this used to allow cancelled healthy calls:
@@ -83,9 +97,26 @@ pub struct GeminiLiveSession {
     /// the last events were drained, when the caller has to decide whether it
     /// can resume.
     resumption: Arc<Mutex<Option<String>>>,
+    credential: Option<String>,
+    failure: Arc<Mutex<Option<CredentialFailure>>>,
 }
 
 impl GeminiLiveSession {
+    pub(crate) fn recovery_handle(&self, keys: &GeminiKeys) -> Option<(String, String)> {
+        let key = self.credential.as_ref()?;
+        if let Some(failure) = *self
+            .failure
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+        {
+            keys.failed(key, failure, ApiSurface::Live);
+        }
+        if keys.select().ok().as_ref() != Some(key) {
+            return None;
+        }
+        Some((key.clone(), self.resumption_handle()?))
+    }
+
     pub async fn send_text(
         &mut self,
         text: &str,
@@ -196,22 +227,137 @@ pub struct GeminiFunctionCall {
     pub args: Value,
 }
 
-pub async fn open_live_session(
-    api_key: &str,
+/// One attempt, charged to the caller's existing Live restart budget.
+///
+/// With a `handle` this continues the session it came from, keeping
+/// everything said so far, and only on the key that session ran on. The
+/// caller must not re-send the greeting after a resumption: the model still
+/// remembers giving it.
+pub(crate) async fn live_session_with_keys(
+    keys: &GeminiKeys,
     boot: &RuntimeBootstrap<'_>,
+    handle: Option<(&str, &str)>,
 ) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>> {
-    open_live_session_at(&gemini_live_websocket_url(api_key), boot, None).await
+    live_session_with_keys_at(LIVE_WEBSOCKET_ENDPOINT, keys, boot, handle).await
 }
 
-/// Continues the session `handle` came from, keeping everything said so far.
-/// The caller must not re-send the greeting after this: the model still
-/// remembers giving it.
-pub async fn resume_live_session(
-    api_key: &str,
+pub(crate) async fn live_session_with_keys_at(
+    endpoint: &str,
+    keys: &GeminiKeys,
     boot: &RuntimeBootstrap<'_>,
-    handle: &str,
+    handle: Option<(&str, &str)>,
 ) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>> {
-    open_live_session_at(&gemini_live_websocket_url(api_key), boot, Some(handle)).await
+    let key = keys.select()?;
+    if handle.is_some_and(|(original, _)| original != key) {
+        return Err(io::Error::other("Gemini credential changed; cold recovery required").into());
+    }
+    match open_live_session_redacted_at(
+        &live_websocket_url_at(endpoint, &key),
+        boot,
+        handle.map(|(_, handle)| handle),
+        keys.redaction_keys(),
+    )
+    .await
+    {
+        Ok(mut session) => {
+            session.credential = Some(key);
+            Ok(session)
+        }
+        Err(error) => {
+            if let Some(failure) = credential_failure(error.as_ref()) {
+                keys.failed(&key, failure, ApiSurface::Live);
+            }
+            // Keep the cause for diagnosis without exposing any configured key.
+            let status = if let Some(error) = error.downcast_ref::<ApiFailure>() {
+                error.status
+            } else if let Some(tokio_tungstenite::tungstenite::Error::Http(response)) =
+                error.downcast_ref::<tokio_tungstenite::tungstenite::Error>()
+            {
+                response.status().as_u16()
+            } else {
+                0
+            };
+            Err(ApiFailure {
+                status,
+                credential: credential_failure(error.as_ref()),
+                detail: Some(keys.redact(&error.to_string())),
+            }
+            .into())
+        }
+    }
+}
+
+/// Whether a failed Live open is worth another attempt under the restart
+/// budget.
+///
+/// Only a rejected key changes the existing policy of retrying within the
+/// budget: it is worth another attempt only when another key can take its
+/// place, because the same key will be rejected the same way. A sole key's
+/// quota failure is retried like any other, since a rate limit clears and
+/// there is nothing to move to. Exhausted credentials are never an
+/// `ApiFailure`, so they stop here; `exhausted_until` says when a rotation out
+/// on quota alone is worth waiting for instead.
+pub(crate) fn retry_live_open(
+    error: &(dyn std::error::Error + 'static),
+    has_backups: bool,
+) -> bool {
+    error.downcast_ref::<ApiFailure>().is_some_and(|error| {
+        !matches!(
+            error.credential,
+            Some(CredentialFailure::Invalid | CredentialFailure::Refused)
+        ) || has_backups
+    })
+}
+
+/// Bounds `open` by `limit`, the way `FIRST_OPEN_LIMIT` bounds a first open.
+pub(crate) async fn first_open_within<T>(
+    limit: Duration,
+    open: impl Future<Output = Result<T, Box<dyn std::error::Error + Send + Sync>>>,
+) -> Result<T, Box<dyn std::error::Error + Send + Sync>> {
+    tokio::time::timeout(limit, open).await.unwrap_or_else(|_| {
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("Gemini did not open within {limit:?}"),
+        )
+        .into())
+    })
+}
+
+/// Opens one Live session the way an interview's first open would choose its
+/// key, moving past keys Gemini rejects while backups remain.
+///
+/// For `check-gemini`, which should pass whenever an interview could start.
+/// It makes at most one attempt per configured key, and no more than the
+/// interview's first open could: that open gets one attempt plus the restart
+/// budget, all inside `FIRST_OPEN_LIMIT`, so a key past either passes a check
+/// but never runs an interview.
+/// Marking a rejected key unavailable is not a bound on its own: a quota
+/// cooldown lasts a minute, and slow rejections from enough keys outlast it,
+/// putting the first key back in rotation. Other failures return at once: a
+/// check reports them instead of waiting them out.
+pub async fn check_live_session(
+    keys: &GeminiKeys,
+    boot: &RuntimeBootstrap<'_>,
+) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>> {
+    check_live_session_at(LIVE_WEBSOCKET_ENDPOINT, keys, boot).await
+}
+
+pub(crate) async fn check_live_session_at(
+    endpoint: &str,
+    keys: &GeminiKeys,
+    boot: &RuntimeBootstrap<'_>,
+) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>> {
+    let attempts = keys.count().min(crate::livekit::GEMINI_RESTART_LIMIT + 1);
+    first_open_within(FIRST_OPEN_LIMIT, async {
+        for _ in 1..attempts {
+            match live_session_with_keys_at(endpoint, keys, boot, None).await {
+                Err(error) if credential_failure(error.as_ref()).is_some() => {}
+                result => return result,
+            }
+        }
+        live_session_with_keys_at(endpoint, keys, boot, None).await
+    })
+    .await
 }
 
 /// Gemini answers 503 often enough that a single attempt loses reports for a
@@ -221,20 +367,20 @@ pub async fn resume_live_session(
 /// this one hands the model back its own invalid output, and the transport
 /// inside it retries a call that never produced any. The candidate is waiting,
 /// so both stay small and `REPORT_TIMEOUT` bounds them together.
-pub async fn generate_report(
-    api_key: &str,
+pub(crate) async fn generate_report_with_keys(
+    keys: &GeminiKeys,
     model: &str,
     prompt: &str,
     problem: &crate::agent::Problem,
 ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
     let mut calls = ReportCalls {
-        api_key,
-        model,
+        keys,
+        url: gemini_generate_content_url(model),
         budget: ReportCallBudget::new(),
     };
     let (report, salvaged) = report_attempts(prompt, problem, &mut calls).await?;
     if let Some(line) = salvaged {
-        eprintln!("{}", redact_api_key(&line, api_key));
+        eprintln!("{}", keys.redact(&line));
     }
     Ok(report)
 }
@@ -249,8 +395,8 @@ trait ReportTransport {
 }
 
 struct ReportCalls<'a> {
-    api_key: &'a str,
-    model: &'a str,
+    keys: &'a GeminiKeys,
+    url: String,
     budget: ReportCallBudget,
 }
 
@@ -259,7 +405,7 @@ impl ReportTransport for ReportCalls<'_> {
         &mut self,
         prompt: &str,
     ) -> impl Future<Output = Result<String, Box<dyn std::error::Error + Send + Sync>>> + Send {
-        generate_report_transport(self.api_key, self.model, prompt, &mut self.budget)
+        generate_report_transport(self.keys, &self.url, prompt, &mut self.budget)
     }
 }
 
@@ -428,26 +574,57 @@ fn salvage_report(raw: Value, attempt: usize, problem: &crate::agent::Problem) -
 }
 
 async fn generate_report_transport(
-    api_key: &str,
-    model: &str,
+    keys: &GeminiKeys,
+    url: &str,
     prompt: &str,
     budget: &mut ReportCallBudget,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let mut api_key = keys.select_report()?;
     loop {
         let call = budget.spend()?;
-        let error = match generate_report_once(api_key, model, prompt).await {
+        let error = match generate_report_once(&api_key, url, prompt).await {
             Ok(report) => return Ok(report),
             Err(error) => error,
         };
-        if budget.is_exhausted() || !is_retryable(error.as_ref()) {
-            return Err(error);
+        let failure = credential_failure(error.as_ref());
+        if let Some(failure) = failure {
+            keys.failed(&api_key, failure, ApiSurface::Report);
         }
+        let retryable = match failure {
+            None => is_retryable(error.as_ref()),
+            Some(CredentialFailure::Quota) => true,
+            Some(CredentialFailure::Invalid | CredentialFailure::Refused) => keys.has_backups(),
+        };
+
+        // With no key left to try, the note names the last key's own failure
+        // rather than the empty rotation it left behind.
+        let detail = keys.redact(&error.to_string());
+        let next = (retryable && !budget.is_exhausted())
+            .then(|| keys.select_report().ok())
+            .flatten();
+        let Some(next) = next else {
+            return Err(io::Error::other(detail).into());
+        };
+
+        // A new key has not failed anything, so it is not made to wait out the
+        // old one's backoff.
+        let backoff = if next == api_key {
+            REPORT_RETRY_BACKOFF
+        } else {
+            Duration::ZERO
+        };
         eprintln!(
-            "gemini report transport_failed call={call} backoff_s={} error={}",
-            REPORT_RETRY_BACKOFF.as_secs(),
-            redact_api_key(&error.to_string(), api_key)
+            "gemini report transport_failed call={call} backoff_s={} error={detail}",
+            backoff.as_secs()
         );
-        tokio::time::sleep(REPORT_RETRY_BACKOFF).await;
+        tokio::time::sleep(backoff).await;
+
+        // Chosen again after the wait, which another interview may have spent
+        // ruling this key out.
+        let Ok(next) = keys.select_report() else {
+            return Err(io::Error::other(detail).into());
+        };
+        api_key = next;
     }
 }
 
@@ -494,6 +671,9 @@ fn repair_prompt(original: &str, invalid: &str, errors: &[String]) -> String {
 /// spent entirely on thinking, is closed by pinning the thinking budget to
 /// zero.
 fn is_retryable(error: &(dyn std::error::Error + 'static)) -> bool {
+    if let Some(error) = error.downcast_ref::<ApiFailure>() {
+        return error.status == 429 || (500..600).contains(&error.status);
+    }
     let Some(error) = error.downcast_ref::<reqwest::Error>() else {
         return false;
     };
@@ -507,25 +687,41 @@ fn is_retryable(error: &(dyn std::error::Error + 'static)) -> bool {
 
 /// The pause-time note-taker. One attempt, no repair loop, no retry.
 ///
-/// Everything `generate_report` spends its budget defending is absent here on
-/// purpose. There is no schema to violate, because the answer is lines of
-/// prose; there is nobody waiting on it, because the interview is still
-/// running; and there is nothing lost when it fails, because the transcript
-/// this was reading still reaches the final reviewer whole. A retry would only
-/// take a second pause to re-read a stretch the next call sees anyway.
-pub async fn generate_interim_review(
-    api_key: &str,
+/// Everything `generate_report_with_keys` spends its budget defending is
+/// absent here on purpose. There is no schema to violate, because the answer
+/// is lines of prose; there is nobody waiting on it, because the interview is
+/// still running; and there is nothing lost when it fails, because the
+/// transcript this was reading still reaches the final reviewer whole. A retry
+/// would only take a second pause to re-read a stretch the next call sees
+/// anyway.
+pub(crate) async fn generate_interim_review_with_keys(
+    keys: &GeminiKeys,
     model: &str,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    generate_content_once(
-        api_key,
-        model,
+    generate_interim_review_at(keys, &gemini_generate_content_url(model), prompt).await
+}
+
+async fn generate_interim_review_at(
+    keys: &GeminiKeys,
+    url: &str,
+    prompt: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let api_key = keys.select_report()?;
+    let result = generate_content_once(
+        &api_key,
+        url,
         &content_request(prompt, interim_generation_config()),
         INTERIM_ATTEMPT_TIMEOUT,
         "interim review",
     )
-    .await
+    .await;
+    if let Err(error) = &result
+        && let Some(failure) = credential_failure(error.as_ref())
+    {
+        keys.failed(&api_key, failure, ApiSurface::Report);
+    }
+    result
 }
 
 /// Plain text and a small ceiling, where the report asks for JSON against a
@@ -562,21 +758,24 @@ fn content_request(prompt: &str, generation_config: Value) -> Value {
 /// different reading of a text-less response lands in one of them.
 async fn generate_content_once(
     api_key: &str,
-    model: &str,
+    url: &str,
     request: &Value,
     timeout: Duration,
     what: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let response = crate::http_client()
-        .post(gemini_generate_content_url(model))
+        .post(url)
         .header("x-goog-api-key", api_key)
         .timeout(timeout)
         .json(request)
         .send()
-        .await?
-        .error_for_status()?
-        .json::<Value>()
         .await?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.json::<Value>().await.unwrap_or(Value::Null);
+        return Err(ApiFailure::from_response(status.as_u16(), &body).into());
+    }
+    let response = response.json::<Value>().await?;
     gemini_text(&response).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -588,12 +787,12 @@ async fn generate_content_once(
 
 async fn generate_report_once(
     api_key: &str,
-    model: &str,
+    url: &str,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     generate_content_once(
         api_key,
-        model,
+        url,
         &generate_report_request(prompt),
         REPORT_ATTEMPT_TIMEOUT,
         "report",
@@ -606,6 +805,20 @@ pub(crate) async fn open_live_session_at(
     boot: &RuntimeBootstrap<'_>,
     resume: Option<&str>,
 ) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>> {
+    let api_keys = reqwest::Url::parse(url)?
+        .query_pairs()
+        .filter(|(name, _)| name == "key")
+        .map(|(_, key)| key.into_owned())
+        .collect();
+    open_live_session_redacted_at(url, boot, resume, api_keys).await
+}
+
+async fn open_live_session_redacted_at(
+    url: &str,
+    boot: &RuntimeBootstrap<'_>,
+    resume: Option<&str>,
+    api_keys: Vec<String>,
+) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>> {
     let (mut stream, _) = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(url))
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Gemini connect timed out"))??;
@@ -614,9 +827,12 @@ pub(crate) async fn open_live_session_at(
             serde_json::to_string(&live_setup_message(boot, resume))?.into(),
         ))
         .await?;
-    tokio::time::timeout(SETUP_TIMEOUT, wait_for_setup_complete(&mut stream))
-        .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Gemini setup timed out"))??;
+    tokio::time::timeout(
+        SETUP_TIMEOUT,
+        wait_for_setup_complete(&mut stream, &api_keys),
+    )
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Gemini setup timed out"))??;
     let (writer, mut reader) = stream.split();
     let (sender, events) = channel(GEMINI_EVENT_QUEUE);
 
@@ -625,6 +841,8 @@ pub(crate) async fn open_live_session_at(
     // reconnect into the cold start this exists to avoid.
     let resumption = Arc::new(Mutex::new(resume.map(str::to_string)));
     let handles = Arc::clone(&resumption);
+    let failure = Arc::new(Mutex::new(None));
+    let closed_with = Arc::clone(&failure);
     let reader = tokio::spawn(async move {
         while let Some(message) = reader.next().await {
             // Both arms below used to end the session without saying anything.
@@ -636,17 +854,26 @@ pub(crate) async fn open_live_session_at(
             let message = match message {
                 Ok(message) => message,
                 Err(error) => {
-                    eprintln!("Gemini socket failed, ending the session: {error}");
+                    eprintln!(
+                        "Gemini socket failed, ending the session: {}",
+                        redact_api_keys(&error.to_string(), &api_keys)
+                    );
                     break;
                 }
             };
             if let Message::Close(frame) = &message {
                 match frame {
-                    Some(frame) => eprintln!(
-                        "Gemini closed the session: code={} reason={}",
-                        u16::from(frame.code),
-                        frame.reason
-                    ),
+                    Some(frame) => {
+                        *closed_with
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner()) =
+                            failure_from_reason(&frame.reason);
+                        eprintln!(
+                            "Gemini closed the session: code={} reason={}",
+                            u16::from(frame.code),
+                            redact_api_keys(&frame.reason, &api_keys)
+                        );
+                    }
                     None => eprintln!("Gemini closed the session without a reason"),
                 }
                 break;
@@ -654,6 +881,15 @@ pub(crate) async fn open_live_session_at(
             let Some(text) = websocket_message_text(message) else {
                 continue;
             };
+            if let Some(error) = server_api_failure(&text)
+                && error.credential.is_some()
+            {
+                *closed_with
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = error.credential;
+                eprintln!("Gemini ended the session: {error}");
+                break;
+            }
             let message = parse_server_message(&text);
             if let Some(handle) = message.resumption_handle {
                 *handles.lock().unwrap_or_else(|error| error.into_inner()) = Some(handle);
@@ -672,15 +908,18 @@ pub(crate) async fn open_live_session_at(
         reader,
         events,
         resumption,
+        credential: None,
+        failure,
         opened_at: std::time::Instant::now(),
     })
 }
 
 pub(crate) fn gemini_live_websocket_url(api_key: &str) -> String {
-    format!(
-        "{LIVE_WEBSOCKET_ENDPOINT}?key={}",
-        percent_encode_query_value(api_key)
-    )
+    live_websocket_url_at(LIVE_WEBSOCKET_ENDPOINT, api_key)
+}
+
+fn live_websocket_url_at(endpoint: &str, api_key: &str) -> String {
+    format!("{endpoint}?key={}", percent_encode_query_value(api_key))
 }
 
 /// No `?key=` here on purpose. A `reqwest` error Displays the URL it was built
@@ -720,6 +959,12 @@ pub fn redact_api_key(text: &str, api_key: &str) -> String {
     }
     text.replace(api_key, "[REDACTED]")
         .replace(&percent_encode_query_value(api_key), "[REDACTED]")
+}
+
+fn redact_api_keys(text: &str, api_keys: &[String]) -> String {
+    api_keys
+        .iter()
+        .fold(text.to_string(), |text, key| redact_api_key(&text, key))
 }
 
 /// The tools the live interviewer is offered, public so the behaviour check in
@@ -892,20 +1137,44 @@ fn generate_report_request(prompt: &str) -> Value {
 
 async fn wait_for_setup_complete(
     stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+    api_keys: &[String],
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     while let Some(message) = stream.next().await {
         let message = message?;
+        let text = match &message {
+            Message::Text(text) => Some(text.as_str()),
+            Message::Binary(bytes) => std::str::from_utf8(bytes).ok(),
+            _ => None,
+        };
+        if let Some(error) = text.and_then(server_api_failure) {
+            return Err(error.into());
+        }
         match message {
             Message::Text(text) if is_setup_complete_text(text.as_str()) => return Ok(()),
             Message::Binary(bytes) if is_setup_complete_text(std::str::from_utf8(&bytes)?) => {
                 return Ok(());
             }
             Message::Close(frame) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::ConnectionAborted,
-                    format!("Gemini closed before setupComplete: {frame:?}"),
-                )
-                .into());
+                let detail = match &frame {
+                    Some(frame) => format!(
+                        "Gemini closed before setupComplete: code={} reason={}",
+                        u16::from(frame.code),
+                        redact_api_keys(&frame.reason, api_keys)
+                    ),
+                    None => "Gemini closed before setupComplete without a reason".to_string(),
+                };
+                if let Some(failure) = frame
+                    .as_ref()
+                    .and_then(|frame| failure_from_reason(&frame.reason))
+                {
+                    return Err(ApiFailure {
+                        status: 0,
+                        credential: Some(failure),
+                        detail: Some(detail),
+                    }
+                    .into());
+                }
+                return Err(io::Error::new(io::ErrorKind::ConnectionAborted, detail).into());
             }
             _ => {}
         }
@@ -916,6 +1185,21 @@ async fn wait_for_setup_complete(
         "Gemini WebSocket ended before setupComplete",
     )
     .into())
+}
+
+fn server_api_failure(text: &str) -> Option<ApiFailure> {
+    // Every frame passes through here, audio included, and
+    // `parse_server_message` parses it again right after.
+    if !text.contains("\"error\"") {
+        return None;
+    }
+    let body: Value = serde_json::from_str(text).ok()?;
+    let error = body.get("error")?;
+    let status = error["code"]
+        .as_u64()
+        .and_then(|code| u16::try_from(code).ok())
+        .unwrap_or(0);
+    Some(ApiFailure::from_response(status, &body))
 }
 
 fn is_setup_complete_text(text: &str) -> bool {

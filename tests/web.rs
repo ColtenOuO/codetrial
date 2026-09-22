@@ -100,7 +100,7 @@ fn primary_pool(url: &str, api_key: &str, api_secret: &str) -> codetrial::config
             url: url.to_string(),
             api_key: api_key.to_string(),
             api_secret: api_secret.to_string(),
-            google_api_key: String::new(),
+            google_api_keys: Vec::new(),
         }],
     }
 }
@@ -111,7 +111,7 @@ fn provider(id: &str, host: &str) -> codetrial::config::Provider {
         url: format!("wss://{host}.livekit.cloud"),
         api_key: format!("{id}-key"),
         api_secret: format!("{id}-secret"),
-        google_api_key: format!("{id}-google"),
+        google_api_keys: vec![format!("{id}-google")],
     }
 }
 

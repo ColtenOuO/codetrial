@@ -7,6 +7,694 @@ use super::*;
 use crate::config::load_from_pairs;
 use crate::runtime::bootstrap;
 
+#[tokio::test]
+async fn interim_failures_update_shared_cooldowns_without_retrying() {
+    for status in [429, 401, 503, 400] {
+        let first = format!("interim-{status}-first");
+        let second = format!("interim-{status}-second");
+        let config = live_config(&[("GOOGLE_API_KEYS", &format!("{first},{second}"))]);
+        let keys = GeminiKeys::from_config(&config);
+        let other = GeminiKeys::from_config(&config);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&requests);
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::post(move |headers: axum::http::HeaderMap| {
+                let seen = Arc::clone(&seen);
+                async move {
+                    let mut seen = seen.lock().unwrap();
+                    seen.push(headers["x-goog-api-key"].to_str().unwrap().to_string());
+                    if seen.len() == 1 {
+                        (
+                            axum::http::StatusCode::from_u16(status).unwrap(),
+                            axum::Json(json!({"error":{"message":"upstream failure"}})),
+                        )
+                    } else {
+                        (
+                            axum::http::StatusCode::OK,
+                            axum::Json(
+                                json!({"candidates":[{"content":{"parts":[{"text":"note"}]}}]}),
+                            ),
+                        )
+                    }
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        assert!(
+            generate_interim_review_at(&keys, &url, "prompt")
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            requests.lock().unwrap().as_slice(),
+            std::slice::from_ref(&first)
+        );
+        let expected = if matches!(status, 429 | 401) {
+            &second
+        } else {
+            &first
+        };
+        assert_eq!(&keys.select_report().unwrap(), expected);
+        assert_eq!(&other.select_report().unwrap(), expected);
+        assert_eq!(
+            keys.select().unwrap(),
+            if status == 401 {
+                second.clone()
+            } else {
+                first.clone()
+            }
+        );
+        assert_eq!(
+            generate_interim_review_at(&keys, &url, "prompt")
+                .await
+                .unwrap(),
+            "note"
+        );
+        assert_eq!(*requests.lock().unwrap(), [first.clone(), expected.clone()]);
+        server.abort();
+    }
+}
+
+/// What a list sharing `key` would select on each surface. A sole key's own
+/// selection never reads the shared map, so only a list can show whether a
+/// failure was recorded against it.
+fn shared_selection(key: &str) -> (String, String) {
+    let config = live_config(&[("GOOGLE_API_KEYS", &format!("{key},{key}-probe"))]);
+    let keys = GeminiKeys::from_config(&config);
+    (keys.select().unwrap(), keys.select_report().unwrap())
+}
+
+#[tokio::test]
+async fn interim_quota_does_not_spend_the_only_keys_final_report_budget() {
+    let key = "interim-single-quota-first";
+    let keys = GeminiKeys::single(key);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::post(|| async { axum::http::StatusCode::TOO_MANY_REQUESTS }),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    assert!(
+        generate_interim_review_at(&keys, &url, "prompt")
+            .await
+            .is_err()
+    );
+    server.abort();
+    assert_eq!(shared_selection(key), (key.to_string(), key.to_string()));
+    let (result, requests, remaining) =
+        report_failover_fixture("interim-single-quota", vec![429, 200], true).await;
+    assert_eq!(result.unwrap(), "report");
+    assert_eq!(requests, [key, key]);
+    assert_eq!(remaining, MAX_REPORT_HTTP_ATTEMPTS - 2);
+}
+
+/// One rejection must not become a refusal of every room this process runs.
+#[tokio::test]
+async fn interim_rejection_leaves_the_only_key_in_rotation() {
+    let keys = GeminiKeys::single("interim-single-invalid");
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::post(|| async { axum::http::StatusCode::UNAUTHORIZED }),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    assert!(
+        generate_interim_review_at(&keys, &url, "prompt")
+            .await
+            .is_err()
+    );
+    server.abort();
+    let key = "interim-single-invalid".to_string();
+    assert_eq!(shared_selection(&key), (key.clone(), key));
+}
+
+#[tokio::test]
+async fn live_noncredential_errors_do_not_end_the_reader() {
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(socket).await.unwrap();
+        socket.next().await.unwrap().unwrap();
+        for text in [
+            r#"{"setupComplete":{}}"#,
+            r#"{"error":{"code":400,"message":"unsupported model"}}"#,
+            r#"{"error":{"code":503,"message":"service unavailable"}}"#,
+            r#"{"serverContent":{"turnComplete":true}}"#,
+            r#"{"error":{"code":429}}"#,
+        ] {
+            socket.send(Message::Text(text.into())).await.unwrap();
+        }
+
+        // Keep the server open: credential errors must stop the reader
+        // themselves.
+        let _ = socket.next().await;
+    });
+    let mut session = open_live_session_at(&url, &boot, None).await.unwrap();
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), session.next_event())
+            .await
+            .unwrap(),
+        Some(GeminiEvent::TurnComplete)
+    ));
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), session.next_event())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        *session.failure.lock().unwrap(),
+        Some(CredentialFailure::Quota)
+    );
+    let _ = session.shutdown().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn report_failover_preserves_the_live_key_and_resumption_handle() {
+    let config = live_config(&[("GOOGLE_API_KEYS", "surface-sticky-a,surface-sticky-b")]);
+    let keys = GeminiKeys::from_config(&config);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(socket).await.unwrap();
+        socket.next().await.unwrap().unwrap();
+        socket
+            .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+            .await
+            .unwrap();
+        let _ = socket.next().await;
+    });
+    let mut session = open_live_session_at(&url, &boot, Some("working-handle"))
+        .await
+        .unwrap();
+    session.credential = Some(keys.select().unwrap());
+    let other_interview = GeminiKeys::from_config(&config);
+    other_interview.failed(
+        "surface-sticky-a",
+        CredentialFailure::Quota,
+        ApiSurface::Report,
+    );
+    assert_eq!(keys.select_report().unwrap(), "surface-sticky-b");
+    assert_eq!(keys.select().unwrap(), "surface-sticky-a");
+    assert_eq!(
+        session.recovery_handle(&keys),
+        Some(("surface-sticky-a".into(), "working-handle".into()))
+    );
+    let _ = session.shutdown().await;
+    server.abort();
+}
+
+async fn report_failover_fixture(
+    prefix: &str,
+    statuses: Vec<u16>,
+    single_key: bool,
+) -> (
+    Result<String, Box<dyn std::error::Error + Send + Sync>>,
+    Vec<String>,
+    usize,
+) {
+    let config = live_config(&[(
+        "GOOGLE_API_KEYS",
+        &format!("{prefix}-first,{prefix}-second"),
+    )]);
+    let keys = if single_key {
+        GeminiKeys::single(&format!("{prefix}-first"))
+    } else {
+        GeminiKeys::from_config(&config)
+    };
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&requests);
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::post(move |headers: axum::http::HeaderMap| {
+            let seen = Arc::clone(&seen);
+            let statuses = statuses.clone();
+            async move {
+                let mut seen = seen.lock().unwrap();
+                let status = statuses[seen.len()];
+                seen.push(headers["x-goog-api-key"].to_str().unwrap().to_string());
+                (
+                    axum::http::StatusCode::from_u16(status).unwrap(),
+                    axum::Json(if status == 200 {
+                        json!({"candidates":[{"content":{"parts":[{"text":"report"}]}}]})
+                    } else {
+                        json!({"error":{"message":"do not expose upstream credentials"}})
+                    }),
+                )
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let mut budget = ReportCallBudget::new();
+    let result = generate_report_transport(&keys, &url, "prompt", &mut budget).await;
+    server.abort();
+    let seen = requests.lock().unwrap().clone();
+    (result, seen, budget.remaining)
+}
+
+#[tokio::test]
+async fn report_still_runs_after_live_quota_exhaustion() {
+    let config = live_config(&[(
+        "GOOGLE_API_KEYS",
+        "live-quota-report-first,live-quota-report-second",
+    )]);
+    let keys = GeminiKeys::from_config(&config);
+    for key in ["live-quota-report-first", "live-quota-report-second"] {
+        keys.failed(key, CredentialFailure::Quota, ApiSurface::Live);
+    }
+    assert!(keys.select().is_err());
+    let (result, seen, remaining) =
+        report_failover_fixture("live-quota-report", vec![200], false).await;
+    assert_eq!(result.unwrap(), "report");
+    assert_eq!(seen, ["live-quota-report-first"]);
+    assert_eq!(remaining, MAX_REPORT_HTTP_ATTEMPTS - 1);
+}
+
+#[tokio::test]
+async fn report_failover_reuses_the_existing_call_budget() {
+    let (result, seen, remaining) =
+        report_failover_fixture("report-order", vec![429, 503, 200], false).await;
+    assert_eq!(result.unwrap(), "report");
+    assert_eq!(
+        seen,
+        [
+            "report-order-first",
+            "report-order-second",
+            "report-order-second"
+        ]
+    );
+    assert_eq!(remaining, MAX_REPORT_HTTP_ATTEMPTS - 3);
+
+    let (result, seen, remaining) =
+        report_failover_fixture("report-outage", vec![503; MAX_REPORT_HTTP_ATTEMPTS], false).await;
+    assert!(result.is_err());
+    assert!(seen.iter().all(|key| key == "report-outage-first"));
+    assert_eq!(remaining, 0);
+
+    let (result, seen, _) = report_failover_fixture("report-bad-model", vec![400], false).await;
+    assert!(result.is_err());
+    assert_eq!(seen, ["report-bad-model-first"]);
+
+    // The last key's own failure, not the empty rotation it leaves.
+    let (result, seen, _) =
+        report_failover_fixture("report-exhausted", vec![401, 429], false).await;
+    assert_eq!(result.unwrap_err().to_string(), "Gemini quota exhausted");
+    assert_eq!(seen.len(), 2);
+}
+
+/// The key is chosen again after the backoff: another interview can rule it
+/// out during the wait, and a call spent on it is a call the report loses.
+#[tokio::test]
+async fn a_key_ruled_out_during_the_backoff_is_not_retried() {
+    let config = live_config(&[(
+        "GOOGLE_API_KEYS",
+        "report-backoff-race-first,report-backoff-race-second",
+    )]);
+    let keys = GeminiKeys::from_config(&config);
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&requests);
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::post(move |headers: axum::http::HeaderMap| {
+            let seen = Arc::clone(&seen);
+            let config = config.clone();
+            async move {
+                let mut seen = seen.lock().unwrap();
+                seen.push(headers["x-goog-api-key"].to_str().unwrap().to_string());
+                if seen.len() > 1 {
+                    return (
+                        axum::http::StatusCode::OK,
+                        axum::Json(
+                            json!({"candidates":[{"content":{"parts":[{"text":"report"}]}}]}),
+                        ),
+                    );
+                }
+                // Well inside the backoff this 503 is about to start.
+                tokio::spawn(async move {
+                    tokio::time::sleep(REPORT_RETRY_BACKOFF / 4).await;
+                    GeminiKeys::from_config(&config).failed(
+                        "report-backoff-race-first",
+                        CredentialFailure::Invalid,
+                        ApiSurface::Report,
+                    );
+                });
+                (
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    axum::Json(json!({"error":{"message":"unavailable"}})),
+                )
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut budget = ReportCallBudget::new();
+    let result = generate_report_transport(&keys, &url, "prompt", &mut budget).await;
+    server.abort();
+    assert_eq!(result.unwrap(), "report");
+    assert_eq!(
+        *requests.lock().unwrap(),
+        ["report-backoff-race-first", "report-backoff-race-second"]
+    );
+}
+
+/// Nothing is left to try, so the note names the rejection, at once.
+#[tokio::test]
+async fn a_sole_rejected_key_reports_the_rejection_after_one_call() {
+    let started = std::time::Instant::now();
+    let (result, seen, remaining) =
+        report_failover_fixture("report-sole-rejected", vec![401], true).await;
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Gemini credential rejected"
+    );
+    assert_eq!(seen, ["report-sole-rejected-first"]);
+    assert_eq!(remaining, MAX_REPORT_HTTP_ATTEMPTS - 1);
+    assert!(started.elapsed() < REPORT_RETRY_BACKOFF);
+}
+
+/// A key that has not failed anything is not made to wait out the backoff of
+/// the one it replaced.
+#[tokio::test]
+async fn moving_to_a_backup_skips_the_backoff() {
+    let started = std::time::Instant::now();
+    let (result, seen, _) =
+        report_failover_fixture("report-no-backoff", vec![429, 200], false).await;
+    assert_eq!(result.unwrap(), "report");
+    assert_eq!(
+        seen,
+        ["report-no-backoff-first", "report-no-backoff-second"]
+    );
+    assert!(started.elapsed() < REPORT_RETRY_BACKOFF);
+}
+
+#[tokio::test]
+async fn live_quota_close_discards_the_handle_before_selecting_a_backup() {
+    let config = live_config(&[("GOOGLE_API_KEYS", "live-close-first,live-close-second")]);
+    let keys = GeminiKeys::from_config(&config);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    let server =
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(socket).await.unwrap();
+            socket.next().await.unwrap().unwrap();
+            socket
+                .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+                .await
+                .unwrap();
+            socket.send(Message::Close(Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
+            code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Policy,
+            reason: "RESOURCE_EXHAUSTED live-close-first".into(),
+        }))).await.unwrap();
+        });
+    let mut session =
+        open_live_session_redacted_at(&url, &boot, Some("original-handle"), keys.redaction_keys())
+            .await
+            .unwrap();
+    session.credential = Some(keys.select().unwrap());
+    assert!(session.next_event().await.is_none());
+    assert!(session.recovery_handle(&keys).is_none());
+    assert_eq!(keys.select().unwrap(), "live-close-second");
+    server.await.unwrap();
+    let _ = session.shutdown().await;
+}
+
+#[tokio::test]
+async fn single_key_reports_keep_the_quota_retry_budget() {
+    let (result, seen, remaining) =
+        report_failover_fixture("report-single", vec![429, 200], true).await;
+    assert_eq!(result.unwrap(), "report");
+    assert_eq!(seen, ["report-single-first", "report-single-first"]);
+    assert_eq!(remaining, MAX_REPORT_HTTP_ATTEMPTS - 2);
+    assert!(
+        GeminiKeys::single("report-single-first")
+            .select_report()
+            .is_ok()
+    );
+
+    let (result, seen, remaining) = report_failover_fixture(
+        "report-single-exhausted",
+        vec![429; MAX_REPORT_HTTP_ATTEMPTS],
+        true,
+    )
+    .await;
+    assert!(result.is_err());
+    assert_eq!(seen.len(), MAX_REPORT_HTTP_ATTEMPTS);
+    assert_eq!(remaining, 0);
+    assert!(
+        GeminiKeys::single("report-single-exhausted-first")
+            .select_report()
+            .is_ok()
+    );
+}
+
+#[test]
+fn live_open_retries_within_budget_and_rotates_only_with_backups() {
+    // Failures unrelated to the key keep the existing policy: retry the
+    // selected key, backups or not. A sole key's quota clears the same way.
+    for status in [0, 400, 404, 429, 500, 503] {
+        let error = ApiFailure::from_response(status, &json!({}));
+        assert!(retry_live_open(&error, false), "status={status}");
+        assert!(retry_live_open(&error, true), "status={status}");
+    }
+    for status in [401, 403] {
+        let error = ApiFailure::from_response(status, &json!({}));
+        assert!(retry_live_open(&error, true), "status={status}");
+        assert!(!retry_live_open(&error, false), "status={status}");
+    }
+    assert!(!GeminiKeys::single("only-key").has_backups());
+    let exhausted = GeminiKeys::single("").select().unwrap_err();
+    assert!(!retry_live_open(&exhausted, false));
+    assert!(!retry_live_open(&exhausted, true));
+}
+
+/// A check that reached a key the interview's first open never could would
+/// pass on a configuration that cannot start an interview.
+#[tokio::test]
+// The handshake callback's error type is a full HTTP response.
+#[allow(clippy::result_large_err)]
+async fn check_stops_where_the_first_interview_open_would() {
+    let names: Vec<String> = (0..crate::livekit::GEMINI_RESTART_LIMIT + 3)
+        .map(|index| format!("check-budget-{index}"))
+        .collect();
+    let config = live_config(&[("GOOGLE_API_KEYS", &names.join(","))]);
+    let keys = GeminiKeys::from_config(&config);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/", listener.local_addr().unwrap());
+    let connections = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = Arc::clone(&connections);
+    let server = tokio::spawn(async move {
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = tokio_tungstenite::accept_hdr_async(
+                socket,
+                |_: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                 _: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                    let mut refusal =
+                        tokio_tungstenite::tungstenite::handshake::server::ErrorResponse::new(None);
+                    *refusal.status_mut() = axum::http::StatusCode::UNAUTHORIZED;
+                    Err(refusal)
+                },
+            )
+            .await;
+        }
+    });
+    assert!(check_live_session_at(&url, &keys, &boot).await.is_err());
+    server.abort();
+    assert_eq!(
+        connections.load(std::sync::atomic::Ordering::SeqCst),
+        crate::livekit::GEMINI_RESTART_LIMIT + 1
+    );
+}
+
+/// A 503 says nothing about the key, so a check reports it instead of
+/// spreading the outage across the backups.
+#[tokio::test]
+// The handshake callback's error type is a full HTTP response.
+#[allow(clippy::result_large_err)]
+async fn check_reports_a_503_without_trying_the_backups() {
+    let config = live_config(&[("GOOGLE_API_KEYS", "check-503-first,check-503-backup")]);
+    let keys = GeminiKeys::from_config(&config);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/", listener.local_addr().unwrap());
+    let connections = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = Arc::clone(&connections);
+    let server = tokio::spawn(async move {
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = tokio_tungstenite::accept_hdr_async(
+                socket,
+                |_: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                 _: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                    let mut refusal =
+                        tokio_tungstenite::tungstenite::handshake::server::ErrorResponse::new(None);
+                    *refusal.status_mut() = axum::http::StatusCode::SERVICE_UNAVAILABLE;
+                    Err(refusal)
+                },
+            )
+            .await;
+        }
+    });
+    assert!(check_live_session_at(&url, &keys, &boot).await.is_err());
+    server.abort();
+    assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(keys.select().unwrap(), "check-503-first");
+}
+
+#[tokio::test]
+// The handshake callback's error type is a full HTTP response.
+#[allow(clippy::result_large_err)]
+async fn check_moves_past_a_rejected_key_to_a_working_backup() {
+    let config = live_config(&[("GOOGLE_API_KEYS", "check-rejected,check-backup")]);
+    let keys = GeminiKeys::from_config(&config);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut seen = Vec::new();
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut key = String::new();
+            let accepted = tokio_tungstenite::accept_hdr_async(
+                socket,
+                |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+                    key = request.uri().query().unwrap_or_default().to_string();
+                    if key.ends_with("rejected") {
+                        let mut refusal =
+                            tokio_tungstenite::tungstenite::handshake::server::ErrorResponse::new(
+                                None,
+                            );
+                        *refusal.status_mut() = axum::http::StatusCode::UNAUTHORIZED;
+                        Err(refusal)
+                    } else {
+                        Ok(response)
+                    }
+                },
+            )
+            .await;
+            seen.push(key);
+            if let Ok(mut socket) = accepted {
+                socket.next().await.unwrap().unwrap();
+                socket
+                    .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+                    .await
+                    .unwrap();
+                let _ = socket.next().await;
+                return seen;
+            }
+        }
+    });
+    let session = check_live_session_at(&url, &keys, &boot).await.unwrap();
+    let _ = session.close().await;
+    assert_eq!(
+        server.await.unwrap(),
+        ["key=check-rejected", "key=check-backup"]
+    );
+    assert_eq!(keys.select().unwrap(), "check-backup");
+}
+
+#[tokio::test]
+async fn setup_close_preserves_the_reason_and_redacts_all_keys() {
+    let config = live_config(&[("GOOGLE_API_KEYS", "close/first,close+backup")]);
+    let keys = GeminiKeys::from_config(&config);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(socket).await.unwrap();
+        socket.next().await.unwrap().unwrap();
+        socket
+            .send(Message::Close(Some(
+                tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                    code:
+                        tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Policy,
+                    reason:
+                        "RESOURCE_EXHAUSTED close/first close%2Ffirst close+backup close%2Bbackup"
+                            .into(),
+                },
+            )))
+            .await
+            .unwrap();
+    });
+    let error = open_live_session_redacted_at(&url, &boot, None, keys.redaction_keys())
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(
+        credential_failure(error.as_ref()),
+        Some(CredentialFailure::Quota)
+    );
+    let detail = error.to_string();
+    assert!(detail.contains("RESOURCE_EXHAUSTED"), "{detail}");
+    assert_eq!(detail.matches("[REDACTED]").count(), 4);
+    assert!(!detail.contains("close/first") && !detail.contains("close+backup"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn setup_errors_are_classified_without_returning_server_text() {
+    let config = live_config(&[]);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let error = r#"{"error":{"code":400,"message":"private-key","details":[{"reason":"API_KEY_INVALID"}]}}"#;
+    for message in [
+        Message::Text(error.into()),
+        Message::Binary(error.as_bytes().to_vec().into()),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(socket).await.unwrap();
+            socket.next().await.unwrap().unwrap();
+            socket.send(message).await.unwrap();
+        });
+        let error = open_live_session_at(&url, &boot, None).await.err().unwrap();
+        assert_eq!(
+            credential_failure(error.as_ref()),
+            Some(CredentialFailure::Invalid)
+        );
+        assert!(!error.to_string().contains("private-key"));
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_resumption_handle_cannot_cross_credentials() {
+    let config = live_config(&[("GOOGLE_API_KEYS", "resume-backup")]);
+    let keys = GeminiKeys::from_config(&config);
+    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let error = live_session_with_keys(&keys, &boot, Some(("resume-original", "handle")))
+        .await
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("cold recovery required"));
+    assert_eq!(keys.select().unwrap(), "resume-backup");
+}
+
 fn report_problem() -> &'static crate::agent::Problem {
     crate::agent::get_problem(Some("two-sum"))
 }
@@ -338,7 +1026,7 @@ fn the_last_attempt_still_refuses_a_judgment_outside_self_review() {
 /// Issue #81: the only error left after both repairs was one self-review
 /// check on the third plan item, and the candidate got `INCOMPLETE` for it.
 /// The salvaged report has to survive the whole way to the card, which runs
-/// `final_report` over what `generate_report` returns.
+/// `final_report` over what `generate_report_with_keys` returns.
 #[test]
 fn a_lone_unsafe_check_after_both_repairs_still_reaches_the_card() {
     let problem = crate::agent::get_problem(Some("two-sum-ii-input-array-is-sorted"));

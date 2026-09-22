@@ -111,8 +111,11 @@ pub fn agent_config_for(base: &AgentConfig, provider: &Provider) -> AgentConfig 
     config.livekit_url = provider.url.clone();
     config.livekit_api_key = provider.api_key.clone();
     config.livekit_api_secret = provider.api_secret.clone();
-    if !provider.google_api_key.is_empty() {
-        config.google_api_key = provider.google_api_key.clone();
+
+    // A provider that brings any Google key of its own replaces the global
+    // ones, so its rooms never bill another project.
+    if !provider.google_api_keys.is_empty() {
+        config.google_api_keys = provider.google_api_keys.clone();
     }
     config
 }

@@ -40,7 +40,7 @@ fn config_with(ids: &[&str]) -> WebServerConfig {
                     url: "wss://host.example".to_string(),
                     api_key: STUB_API_KEY.to_string(),
                     api_secret: STUB_API_SECRET.to_string(),
-                    google_api_key: String::new(),
+                    google_api_keys: Vec::new(),
                 })
                 .collect(),
         },

@@ -466,7 +466,7 @@ async fn contract_stop_egress_sends_what_the_fixture_describes() {
                 url: format!("ws://127.0.0.1:{port}"),
                 api_key: API_KEY.to_string(),
                 api_secret: API_SECRET.to_string(),
-                google_api_key: String::new(),
+                google_api_keys: Vec::new(),
             }],
         },
         room_prefix: "interview".to_string(),
