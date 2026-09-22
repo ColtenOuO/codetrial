@@ -305,6 +305,62 @@ pub fn validate_report_candidate(
     Ok(report)
 }
 
+/// What a self-review list emptied by the filter is given instead, so the
+/// plan item still has the one check the schema requires.
+pub(crate) const SELF_REVIEW_REPLACEMENT: &str = "Review this step against the interview evidence";
+
+/// Remove the self-review checks that judge delivery or personality, and
+/// say how many went.
+///
+/// A self-review check is optional coaching text, unlike a score, decision, or
+/// feedback improvement. Keeping the rest of a report when one check judges
+/// delivery or personality is more useful than turning an otherwise complete
+/// interview into an incomplete one. This is the provider's fallback for when
+/// its repairs run out or its calls stop answering, not part of validation:
+/// while a repair can still be asked for, the model rewriting the check gives
+/// the candidate something specific, and `validate_report` stays strict so no
+/// other caller learns to lean on it.
+///
+/// Only a string that trips the judgment filter is removed. A malformed entry
+/// or an empty list is left for validation to refuse, because nothing unsafe
+/// was taken out of it. A list over the length limit can come back within it,
+/// and is then accepted: what is left is the model's own safe checks. A list
+/// this emptied is refilled because the schema floors it at one item, not
+/// because the line is worth reading, and it is fixed text rather than
+/// model-authored evidence, so it cannot smuggle the same judgment back.
+pub(crate) fn sanitize_report_candidate(
+    mut report: serde_json::Value,
+) -> (serde_json::Value, usize) {
+    let Some(items) = report
+        .get_mut("improvementPlan")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return (report, 0);
+    };
+    let mut dropped = 0;
+    for item in items {
+        let Some(checks) = item
+            .get_mut("selfReview")
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        let before = checks.len();
+        checks.retain(|check| {
+            check
+                .as_str()
+                .and_then(unsupported_observable_judgment)
+                .is_none()
+        });
+        let removed = before - checks.len();
+        dropped += removed;
+        if removed > 0 && checks.is_empty() {
+            checks.push(serde_json::json!(SELF_REVIEW_REPLACEMENT));
+        }
+    }
+    (report, dropped)
+}
+
 /// Reject published-problem names from candidate-facing `summary`,
 /// `codingFeedback`, `communicationFeedback`, and `improvementPlan` fields.
 ///

@@ -227,31 +227,62 @@ pub async fn generate_report(
     prompt: &str,
     problem: &crate::agent::Problem,
 ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-    let mut request_prompt = prompt.to_string();
-    let mut budget = ReportCallBudget::new();
-    for semantic_attempt in 0..=MAX_REPORT_REPAIRS {
-        let output =
-            generate_report_transport(api_key, model, &request_prompt, &mut budget).await?;
-        match report_semantic_step(prompt, &output, semantic_attempt, problem) {
-            ReportSemanticStep::Complete(report) => return Ok(report),
-            ReportSemanticStep::Repair(repair) => request_prompt = repair,
+    let mut calls = ReportCalls {
+        api_key,
+        model,
+        budget: ReportCallBudget::new(),
+    };
+    let (report, salvaged) = report_attempts(prompt, problem, &mut calls).await?;
+    if let Some(line) = salvaged {
+        eprintln!("{}", redact_api_key(&line, api_key));
+    }
+    Ok(report)
+}
 
-            // Naming the rules that failed, because this string is the whole of
-            // what the candidate and the logs get when a report is lost.
-            // "failed schema validation" said only that something was wrong.
-            // The rules are ours and so are the paths, but `unknown field`
-            // quotes a key the model chose, so this reaches the report card as
-            // model-authored text: the browser escapes the summary it lands in,
-            // and `fallback_report` bounds how much of it is shown.
-            ReportSemanticStep::Failed(errors) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "Gemini report failed schema validation after {MAX_REPORT_REPAIRS} repairs: {}",
-                        bounded_errors(&errors).join("; ")
-                    ),
-                )
-                .into());
+/// Where the semantic loop gets each response from, so the tests can script
+/// the responses and the transport failures without a socket.
+trait ReportTransport {
+    fn call(
+        &mut self,
+        prompt: &str,
+    ) -> impl Future<Output = Result<String, Box<dyn std::error::Error + Send + Sync>>> + Send;
+}
+
+struct ReportCalls<'a> {
+    api_key: &'a str,
+    model: &'a str,
+    budget: ReportCallBudget,
+}
+
+impl ReportTransport for ReportCalls<'_> {
+    fn call(
+        &mut self,
+        prompt: &str,
+    ) -> impl Future<Output = Result<String, Box<dyn std::error::Error + Send + Sync>>> + Send {
+        generate_report_transport(self.api_key, self.model, prompt, &mut self.budget)
+    }
+}
+
+/// The report, and the line that records its use when it is a salvage.
+type ReportOutcome = Result<(Value, Option<String>), Box<dyn std::error::Error + Send + Sync>>;
+
+async fn report_attempts(
+    prompt: &str,
+    problem: &crate::agent::Problem,
+    transport: &mut impl ReportTransport,
+) -> ReportOutcome {
+    let mut request_prompt = prompt.to_string();
+    let mut attempts = ReportAttempts { held: None };
+    for semantic_attempt in 0..=MAX_REPORT_REPAIRS {
+        let output = match transport.call(&request_prompt).await {
+            Ok(output) => output,
+            Err(error) => return attempts.finish(problem, "transport_error", error),
+        };
+        match attempts.step(prompt, &output, semantic_attempt, problem) {
+            ReportStep::Complete(report) => return Ok((report, None)),
+            ReportStep::Repair(repair) => request_prompt = repair,
+            ReportStep::Failed(error) => {
+                return attempts.finish(problem, "no_repair_left", error);
             }
         }
     }
@@ -283,25 +314,117 @@ impl ReportCallBudget {
     }
 }
 
-enum ReportSemanticStep {
-    Complete(Value),
-    Repair(String),
-    Failed(Vec<String>),
+/// What the semantic loop carries from one attempt to the next.
+///
+/// A repair can make a response worse: the model fixes the rule it was told
+/// about and breaks one it was not, or the call after it never answers. So the
+/// latest response that only a dropped self-review check kept from being a
+/// report is held, and it is what the candidate gets if no later attempt does
+/// better, rather than `INCOMPLETE` for a report an earlier attempt had.
+struct ReportAttempts {
+    held: Option<Salvage>,
 }
 
-fn report_semantic_step(
-    original: &str,
-    output: &str,
-    repairs_used: usize,
-    problem: &crate::agent::Problem,
-) -> ReportSemanticStep {
-    match parse_and_validate_report(output, problem) {
-        Ok(report) => ReportSemanticStep::Complete(report),
-        Err(errors) if repairs_used < MAX_REPORT_REPAIRS => {
-            ReportSemanticStep::Repair(repair_prompt(original, output, &errors))
+enum ReportStep {
+    Complete(Value),
+    Repair(String),
+    Failed(Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl ReportAttempts {
+    fn step(
+        &mut self,
+        prompt: &str,
+        output: &str,
+        semantic_attempt: usize,
+        problem: &crate::agent::Problem,
+    ) -> ReportStep {
+        let errors = match parse_report_text(output) {
+            Err(errors) => errors,
+            Ok(raw) => match crate::agent::validate_report_candidate(&raw, problem) {
+                Ok(report) => return ReportStep::Complete(report),
+                Err(errors) => {
+                    if let Some(salvage) = salvage_report(raw, semantic_attempt, problem) {
+                        self.held = Some(salvage);
+                    }
+                    errors
+                }
+            },
+        };
+        if semantic_attempt < MAX_REPORT_REPAIRS {
+            return ReportStep::Repair(repair_prompt(prompt, output, &errors));
         }
-        Err(errors) => ReportSemanticStep::Failed(errors),
+
+        // Naming the rules that failed, because this string is the whole of
+        // what the candidate and the logs get when a report is lost. "failed
+        // schema validation" said only that something was wrong. The rules are
+        // ours and so are the paths, but `unknown field` quotes a key the model
+        // chose, so this reaches the report card as model-authored text: the
+        // browser escapes the summary it lands in, and `fallback_report` bounds
+        // how much of it is shown.
+        let error = io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Gemini report failed schema validation after {MAX_REPORT_REPAIRS} repairs: {}",
+                bounded_errors(&errors).join("; ")
+            ),
+        );
+        ReportStep::Failed(error.into())
     }
+
+    /// The held salvage if there is one, or `error`. When a salvage is used the
+    /// error reaches only the log: a report is worth more to the candidate than
+    /// the reason a later attempt failed, but a revoked key or a spent budget
+    /// still has to reach someone.
+    ///
+    /// Logged where a salvage is used, not where one is found: a held salvage
+    /// that a later attempt beats was never shown to anyone. The dropped
+    /// checks are model output the candidate never sees, and a repair would
+    /// otherwise have been the record of them. The error is quoted because
+    /// `unknown field` names a key the model chose, and a newline in it would
+    /// otherwise write a log line of its own.
+    fn finish(
+        &mut self,
+        problem: &crate::agent::Problem,
+        after: &str,
+        error: Box<dyn std::error::Error + Send + Sync>,
+    ) -> ReportOutcome {
+        let Some(salvage) = self.held.take() else {
+            return Err(error);
+        };
+        let line = format!(
+            "gemini report self_review_dropped problem={} checks={} attempt={} after={after} error={:?}",
+            problem.id,
+            salvage.dropped,
+            salvage.attempt,
+            error.to_string()
+        );
+        Ok((salvage.report, Some(line)))
+    }
+}
+
+/// A response that is a report once its unsafe self-review checks are
+/// dropped.
+struct Salvage {
+    report: Value,
+    dropped: usize,
+    attempt: usize,
+}
+
+/// A response whose only fault is a self-review check judging delivery or
+/// personality, with that check dropped. Anything else wrong with it, and it
+/// is not a salvage: the report it returns has passed the whole validation.
+fn salvage_report(raw: Value, attempt: usize, problem: &crate::agent::Problem) -> Option<Salvage> {
+    let (sanitized, dropped) = crate::agent::sanitize_report_candidate(raw);
+    if dropped == 0 {
+        return None;
+    }
+    let report = crate::agent::validate_report_candidate(&sanitized, problem).ok()?;
+    Some(Salvage {
+        report,
+        dropped,
+        attempt,
+    })
 }
 
 async fn generate_report_transport(
@@ -328,18 +451,15 @@ async fn generate_report_transport(
     }
 }
 
-fn parse_and_validate_report(
-    text: &str,
-    problem: &crate::agent::Problem,
-) -> Result<Value, Vec<String>> {
+/// The size limit and the parse, before any rule is checked: a runaway
+/// response is refused without being read.
+fn parse_report_text(text: &str) -> Result<Value, Vec<String>> {
     if text.len() > MAX_REPORT_RESPONSE_BYTES {
         return Err(vec![format!(
             "$: response exceeds {MAX_REPORT_RESPONSE_BYTES} bytes"
         )]);
     }
-    let raw = serde_json::from_str::<Value>(text)
-        .map_err(|error| vec![format!("$: invalid JSON: {error}")])?;
-    crate::agent::validate_report_candidate(&raw, problem)
+    serde_json::from_str::<Value>(text).map_err(|error| vec![format!("$: invalid JSON: {error}")])
 }
 
 /// The one bound on error text, used by both places errors leave this module:
