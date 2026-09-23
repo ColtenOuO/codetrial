@@ -241,7 +241,9 @@ impl RuntimeActivity {
     /// read inside would already have moved past it, so a half-open window and
     /// a closed one behave identically to every test that can be written.
     pub(super) fn watch_prompt(&mut self, state: &RuntimeState, now: Instant) -> Option<String> {
-        if state.paused {
+        // Both watcher prompts ask about code; the behavioral round must not
+        // reopen coding or use an idle editor to revive an abandoned probe.
+        if state.paused || state.behavioral_round_started {
             return None;
         }
         let decision = timing_decision(&TimingInput {
