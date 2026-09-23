@@ -6,11 +6,12 @@
 //! so each applier decides what it is willing to believe before it stores it.
 
 use super::{
-    DataEventResult, InterviewLoop, LanguageChoiceContext, MAX_INTEGRITY_EVENTS,
-    ROUND_TRANSITION_SKEW, RuntimeState, TIME_WARNING_S, behavioral_time_warning, cold_restart,
-    format_test_run, integrity_hash, language_choice, python_truthy, resume, round_skipped,
-    round_started, sanitize_integrity_event, sanitize_test_run, spoken_language,
-    test_reaction_decision, test_results_reaction, test_setup_error_reaction, time_warning,
+    DataEventResult, INTERVIEWER_SPEAKER, InterviewLoop, LanguageChoiceContext,
+    MAX_INTEGRITY_EVENTS, ROUND_TRANSITION_SKEW, RuntimeState, TIME_WARNING_S,
+    behavioral_time_warning, cold_restart, format_test_run, integrity_hash, language_choice,
+    python_truthy, resume, round_skipped, round_started, sanitize_integrity_event,
+    sanitize_test_run, spoken_language, test_reaction_decision, test_results_reaction,
+    test_setup_error_reaction, time_warning,
 };
 use crate::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_TEST_RESULTS};
 
@@ -268,6 +269,9 @@ fn control_round_transition(state: &mut RuntimeState) -> DataEventResult {
     if super::coding_round_complete(state) {
         state.behavioral_round_started = true;
         state.behavioral_round_transcript_start = state.transcript.len();
+        state.behavioral_round_prior_turn =
+            super::last_speaker_line(&state.transcript, INTERVIEWER_SPEAKER)
+                .map(|(index, line)| (index, line.clone()));
         DataEventResult {
             round_changed: Some("started"),
             generate_reply: Some(round_started()),

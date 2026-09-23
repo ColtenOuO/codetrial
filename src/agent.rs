@@ -676,6 +676,10 @@ pub struct RuntimeState {
     /// bounded tail no longer reaches back this far cannot see whether the one
     /// follow-up was used or the candidate declined, so it asks for neither.
     pub behavioral_round_transcript_start: usize,
+    /// The last interviewer entry when the round opened. An in-flight turn can
+    /// grow in place, even with a candidate entry after it, without adding a
+    /// transcript line. Recovery must include that turn if its text changed.
+    pub behavioral_round_prior_turn: Option<(usize, String)>,
     pub paused: bool,
     pub framework_evidence: Vec<FrameworkEvidence>,
     pub code: String,
@@ -791,6 +795,7 @@ impl Default for RuntimeState {
             time_warning_seen: false,
             behavioral_round_started: false,
             behavioral_round_transcript_start: 0,
+            behavioral_round_prior_turn: None,
             paused: false,
             framework_evidence: Vec::new(),
             code: String::new(),
@@ -866,6 +871,10 @@ const _: () = assert!(INTERIM_OPENING_KEPT < MAX_INTERIM_NOTES);
 /// `candidate_lines` quietly answering zero forever.
 pub(crate) const CANDIDATE_SPEAKER: &str = "Candidate";
 
+/// Shared by the transcript writer and the round-boundary lookup so a speaker
+/// rename cannot silently disable recovery of an in-flight interviewer turn.
+pub(crate) const INTERVIEWER_SPEAKER: &str = "Interviewer";
+
 /// Where the transcript nobody has reviewed yet begins.
 ///
 /// Clamped rather than indexed directly: the cursor counts lines already shown,
@@ -899,6 +908,19 @@ pub fn code_head(code: &str, budget: usize) -> String {
         .find(|end| code.is_char_boundary(*end))
         .unwrap_or_default();
     format!("{}\n(remainder of the editor omitted)", &code[..end])
+}
+
+/// The newest line `speaker` wrote, with its index.
+pub(crate) fn last_speaker_line<'a>(
+    lines: &'a [String],
+    speaker: &str,
+) -> Option<(usize, &'a String)> {
+    let prefix = format!("{speaker}: ");
+    lines
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, line)| line.starts_with(&prefix))
 }
 
 /// The candidate's own turns in a stretch of transcript.
@@ -1446,10 +1468,14 @@ pub fn transcript_tail(lines: &[String], budget: usize) -> String {
         if kept.is_empty() {
             kept.push(tail_within(&lines[start - 1], budget));
         }
-        kept.insert(0, "(earlier conversation omitted)");
+        kept.insert(0, EARLIER_OMITTED);
     }
     kept.join("\n")
 }
+
+/// What stands in for the lines a bounded tail dropped, so a reader takes the
+/// opening as cut rather than missing.
+pub(crate) const EARLIER_OMITTED: &str = "(earlier conversation omitted)";
 
 /// The first of the whole lines `transcript_tail` keeps, each paid for with
 /// its separator. A cold restart asks this rather than counting for itself,
@@ -1492,9 +1518,9 @@ pub fn format_transcript(items: &[TranscriptItem<'_>]) -> String {
             }
             let text = item.text.trim();
             let speaker = if item.role == "assistant" {
-                "Interviewer"
+                INTERVIEWER_SPEAKER
             } else {
-                "Candidate"
+                CANDIDATE_SPEAKER
             };
             Some(format!("{speaker}: {text}"))
         })

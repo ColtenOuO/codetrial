@@ -149,7 +149,7 @@ fn prompt_samples() -> Value {
     let behavioral_state = RuntimeState {
         behavioral_round_started: true,
         transcript: vec![
-            "Jim: Tell me about a tricky debugging problem you solved.".to_string(),
+            "Interviewer: Tell me about a tricky debugging problem you solved.".to_string(),
             "Candidate: I cannot think of an example right now.".to_string(),
         ],
         ..RuntimeState::default()
@@ -160,6 +160,13 @@ fn prompt_samples() -> Value {
         "roundStarted": round_started(),
         "roundSkipped": round_skipped(),
         "coldRestartBehavioral": cold_restart(&behavioral_state),
+        "coldRestartBehavioralInFlight": cold_restart(&RuntimeState {
+            behavioral_round_started: true,
+            behavioral_round_transcript_start: 1,
+            behavioral_round_prior_turn: Some((0, "Interviewer: That covers the code.".to_string())),
+            transcript: vec!["Interviewer: That covers the code. Tell me about a tricky bug you tracked down.".to_string()],
+            ..RuntimeState::default()
+        }),
         "coldRestartBehavioralOpened": cold_restart(&RuntimeState {
             behavioral_round_started: true,
             behavioral_round_transcript_start: 1,
@@ -381,6 +388,15 @@ fn exact_fixture_keys(value: &Value, expected: &[&str], path: &str) {
 /// outright on a machine that has been up for less than that.
 fn past_the_coding_round(state: &mut RuntimeState) {
     state.coding_minutes = 0;
+}
+
+/// Past the coding round with Test and Optimizations evidence recorded, so the
+/// round transition's completion gate opens the behavioral round.
+fn past_the_coding_gate(state: &mut RuntimeState) {
+    past_the_coding_round(state);
+    for phase in ["test", "optimizations"] {
+        record_framework_evidence(state, &json!({"phase": phase, "source": "candidate_speech", "kind": "observed", "confidence": 90, "summary": format!("candidate completed {phase}")})).unwrap();
+    }
 }
 
 fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
