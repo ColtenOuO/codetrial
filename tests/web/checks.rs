@@ -21,7 +21,8 @@ async fn server_check_accepts_running_rust_server() {
     );
     let (base, server) = spawn_web_server(config).await;
     let output = tokio::task::spawn_blocking(move || {
-        Command::new("scripts/server-check.sh")
+        Command::new("sh")
+            .arg("scripts/server-check.sh")
             .env("CODETRIAL_WEB_URL", base)
             .env("SERVER_CHECK_SESSION_COOKIE", cookie)
             .output()
@@ -36,8 +37,8 @@ async fn server_check_accepts_running_rust_server() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 /// The check signs itself in through `/api/login` rather than being handed a
@@ -53,7 +54,8 @@ async fn server_check_signs_itself_in_against_an_external_server() {
     );
     let (base, server) = spawn_web_server(config).await;
     let output = tokio::task::spawn_blocking(move || {
-        Command::new("scripts/server-check.sh")
+        Command::new("sh")
+            .arg("scripts/server-check.sh")
             .env("CODETRIAL_WEB_URL", base)
             .env_remove("SERVER_CHECK_SESSION_COOKIE")
             .output()
@@ -69,6 +71,6 @@ async fn server_check_signs_itself_in_against_an_external_server() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }

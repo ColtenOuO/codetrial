@@ -533,9 +533,8 @@ fn a_file_that_looks_like_a_provider_but_cannot_be_one_says_so() {
         ],
     );
 
-    // A symlink is never followed, so it has to be reported rather than
-    // dropped.
-    std::os::unix::fs::symlink("/etc/passwd", dir.join("codetrial.env.link")).unwrap();
+    // A directory cannot be a provider file and must be reported.
+    std::fs::create_dir(dir.join("codetrial.env.directory")).unwrap();
 
     let (providers, warnings) = codetrial::config::discover_providers(&dir, false);
 
@@ -550,7 +549,7 @@ fn a_file_that_looks_like_a_provider_but_cannot_be_one_says_so() {
         "eu-",
         "eu_west",
         &"c".repeat(40),
-        "link",
+        "directory",
     ] {
         assert!(
             warnings.iter().any(|warning| warning.contains(named)),
@@ -562,10 +561,24 @@ fn a_file_that_looks_like_a_provider_but_cannot_be_one_says_so() {
     // counted here but not named above: asserting a warning contains "-" would
     // pass on any of them, since the fixture path itself has dashes.
     assert_eq!(warnings.len(), 8, "{warnings:?}");
-    assert!(
-        !warnings.iter().any(|warning| warning.contains("root:")),
-        "a symlink must not be read: {warnings:?}"
-    );
+}
+
+/// A symlink is never followed, so it has to be reported rather than dropped.
+#[cfg(unix)]
+#[test]
+fn a_provider_symlink_is_not_followed() {
+    let dir = provider_fixture("provider-symlink", &[]);
+    let target = dir.join("target");
+    std::fs::write(
+        &target,
+        provider_file("wss://linked.example", "key", "secret"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&target, dir.join("codetrial.env.link")).unwrap();
+    let (providers, warnings) = codetrial::config::discover_providers(&dir, false);
+    assert!(providers.is_empty(), "a symlink must not be read");
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("link"));
 }
 
 /// Needs a directory of its own: on a case-insensitive filesystem

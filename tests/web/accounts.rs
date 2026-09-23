@@ -6,8 +6,8 @@
 
 use super::*;
 
-#[test]
-fn account_database_schema_creates_login_tables() {
+#[tokio::test]
+async fn account_database_schema_creates_login_tables() {
     let path = std::env::temp_dir().join(format!(
         "codetrial-accounts-{}-{}.db",
         std::process::id(),
@@ -80,7 +80,9 @@ fn account_database_schema_creates_login_tables() {
         }
     }
 
-    remove_database(path);
+    drop(statement);
+    drop(connection);
+    remove_database(path).await;
 }
 
 #[tokio::test]
@@ -161,8 +163,8 @@ async fn account_routes_record_interviewee_github_login() {
         .unwrap();
     assert_eq!(delete_reports.status(), 401);
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// A typed handle is not proof of anything, so it must not be the key an
@@ -211,8 +213,8 @@ async fn a_claimed_handle_does_not_reach_an_earlier_candidates_reports() {
         .unwrap();
     assert_eq!(mine["reports"][0]["id"], "report-one");
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// The other half of the fail-closed rule, and the one an operator actually
@@ -259,8 +261,8 @@ async fn an_unmigratable_account_database_refuses_rather_than_disabling_login() 
         .unwrap();
     assert_eq!(token.status(), 503);
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// A database that will not open must not read as "this server has no
@@ -310,7 +312,7 @@ async fn an_unopenable_account_database_refuses_rather_than_disabling_login() {
         .await
         .unwrap();
     assert_eq!(login.status(), 503);
-    server.abort();
+    server.shutdown().await;
     fs::remove_dir_all(path).unwrap();
 
     // The other answer, so "503 rather than 404" above is a distinction this
@@ -347,7 +349,7 @@ async fn an_unopenable_account_database_refuses_rather_than_disabling_login() {
         "nothing to sign in to, and the lobby has to be told so"
     );
 
-    server.abort();
+    server.shutdown().await;
 }
 
 /// `/api/token` needs a session, and this is where sessions come from, so an
@@ -377,8 +379,8 @@ async fn login_endpoint_rate_limits_a_noisy_client() {
     assert_eq!(blocked.status(), 429);
     assert_eq!(blocked.headers().get("retry-after").unwrap(), "60");
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 #[tokio::test]
@@ -412,8 +414,8 @@ async fn login_rejects_a_body_that_is_not_json() {
         assert_eq!(rejected.status(), 400, "{handle:?} is not a GitHub handle");
     }
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 #[tokio::test]
@@ -492,9 +494,9 @@ async fn github_callback_sets_session_and_clears_oauth_state() {
     assert_eq!(session["signedIn"], true);
     assert_eq!(session["user"]["login"], "octocat");
 
-    server.abort();
-    github_server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    github_server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// A cookie nobody signed is not a session.
@@ -573,8 +575,8 @@ async fn a_forged_session_cookie_is_not_a_session() {
     assert_eq!(signed_in["signedIn"], true);
     assert_eq!(signed_in["user"]["login"], "one");
 
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 /// The rate limit is keyed by address. If anonymous callers could spend it, a
@@ -637,8 +639,8 @@ async fn anonymous_requests_cannot_spend_the_signed_in_budget() {
         "the candidate's budget was spent by people who never signed in"
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 #[test]
@@ -814,8 +816,8 @@ async fn account_reports_are_scoped_to_the_signed_in_user() {
         "accounts exist here, so the browser has to know to demand a sign-in"
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// `/api/reports` is an authenticated write with no rate limit, and the client
@@ -872,8 +874,8 @@ async fn a_full_account_cannot_grow_the_report_database() {
         "the refused write must not have landed",
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// A report gets its own ceiling, and the endpoint has to use it.
@@ -970,8 +972,8 @@ async fn a_report_is_bounded_by_its_own_ceiling_rather_than_the_session_one() {
         vec!["roomy"]
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 #[test]
@@ -1040,8 +1042,8 @@ async fn self_declared_handle_cannot_authorize_delivery() {
 
     drop(statement);
     drop(connection);
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 /// An OAuth sign-in stores the primary verified address, and only that one.
@@ -1116,9 +1118,9 @@ async fn github_callback_stores_only_the_primary_verified_email() {
         .unwrap();
     assert_eq!(allowed.status(), 200);
 
-    server.abort();
-    github_server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    github_server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// The scope has to name what the callback then asks for. A widened fetch
@@ -1165,7 +1167,7 @@ async fn login_requests_the_email_scope_it_later_reads() {
         Some("read:user user:email"),
         "the authorize URL has to request the scope the callback then reads: {location}"
     );
-    server.abort();
+    server.shutdown().await;
 
     // And a deployment that records nothing does not put a candidate's private
     // address on the consent screen, because it would never read it.
@@ -1175,8 +1177,8 @@ async fn login_requests_the_email_scope_it_later_reads() {
         Some("read:user")
     );
 
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 /// A recording block for tests that only care that recording is on.
@@ -1198,7 +1200,7 @@ async fn the_session_reports_how_long_a_recorded_interview_may_run() {
         .unwrap();
 
     assert_eq!(session["maxDurationMin"], recording_config().max_minutes);
-    server.abort();
+    server.shutdown().await;
 }
 
 /// A verified address is not given up because somebody else's server had a bad
@@ -1245,8 +1247,8 @@ async fn a_failed_email_lookup_does_not_unverify_an_account() {
         }
     };
     assert_eq!(callback(base.clone()).await.status(), 302);
-    server.abort();
-    good_server.abort();
+    server.shutdown().await;
+    good_server.shutdown().await;
 
     // Now the same account signs in again while /user/emails is rate limited.
     let (rate_limited, rate_limited_server) = spawn_rate_limited_github().await;
@@ -1282,9 +1284,9 @@ async fn a_failed_email_lookup_does_not_unverify_an_account() {
     assert_eq!(email.as_deref(), Some("octocat@example.test"));
     assert_eq!(verified, 1, "the address survives the outage");
 
-    server.abort();
-    rate_limited_server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    rate_limited_server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// Every route that acts on an account rejects a request carrying no session.
@@ -1358,8 +1360,8 @@ async fn every_owner_scoped_route_refuses_an_anonymous_request() {
         );
     }
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// `Provider` and `RecordingConfig` both hand-write a redacting `Debug`, and

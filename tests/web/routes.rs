@@ -64,9 +64,9 @@ async fn a_refused_code_exchange_names_the_token_leg_not_the_profile_leg() {
         "a refused code fails the exchange, not the profile request"
     );
 
-    server.abort();
-    github_server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    github_server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// The callback only accepts the login it started.
@@ -223,9 +223,9 @@ async fn the_oauth_callback_requires_the_state_it_minted() {
         "an encoded callback has to decode to the code and the state that were minted"
     );
 
-    server.abort();
-    github_server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    github_server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// The same endpoint on a server that records nothing, so the cap is the range
@@ -242,7 +242,7 @@ async fn a_server_that_does_not_record_caps_nothing_beyond_the_range() {
         .unwrap();
 
     assert_eq!(session["maxDurationMin"], MAX_DURATION_MIN);
-    server.abort();
+    server.shutdown().await;
 }
 
 #[test]

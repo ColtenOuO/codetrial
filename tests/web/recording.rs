@@ -145,8 +145,8 @@ async fn interviews_persist_consent_before_egress() {
         .unwrap();
     assert_eq!(borrowed.status(), 403);
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// Withdrawal is recorded, and a withdrawn interview cannot start another
@@ -256,8 +256,8 @@ async fn consent_withdrawal_stops_egress() {
         "a stranger's request changes nothing"
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// A second start does not make a second Egress job, and is not told the
@@ -313,8 +313,8 @@ async fn a_second_start_reports_the_state_the_row_holds() {
     );
     assert_eq!(provider.starts(), 1, "one interview, one Egress job");
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// The row moves while the provider is answering, and the answer says so.
@@ -372,8 +372,8 @@ async fn a_start_overtaken_mid_flight_stops_its_own_job() {
         "the id that got there first is the one that stays"
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// A completion carrying nothing is a failure, driven through the real webhook.
@@ -452,8 +452,8 @@ async fn a_completion_with_no_file_fails_the_recording() {
         );
     }
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// A malformed body is a client error, whether or not this server records.
@@ -480,8 +480,8 @@ async fn a_malformed_body_is_a_bad_request_even_on_a_recording_server() {
         "Session request must be JSON."
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// A request that fails after the consent check must not spend the consent.
@@ -542,8 +542,8 @@ async fn a_refused_interview_leaves_its_consent_unspent() {
         .unwrap();
     assert_eq!(retried.status(), 200);
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// The per-batch caps bound one request and the stored quota bounds what an
@@ -618,8 +618,8 @@ async fn replay_ingestion_rate_limits_a_looping_client() {
         .unwrap();
     assert_eq!(stored, i64::from(REPLAY_RATE_LIMIT));
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// Reading a recording costs budget too, and the three read routes share one.
@@ -707,8 +707,8 @@ async fn recording_reads_share_one_rate_limit() {
         .unwrap();
     assert_eq!(posted.status(), 200);
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// The replay is the account's own, and only the account's.
@@ -891,8 +891,8 @@ async fn replay_events_are_owner_scoped() {
         "the two stored above plus the synthetic quota row, and nothing after the withdrawal"
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// The recorder reads the replay with the credential it was given.
@@ -1038,8 +1038,8 @@ async fn the_recorder_reads_the_replay_for_the_room_its_token_names() {
         401
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// A refused start says which refusal it was.
@@ -1083,8 +1083,8 @@ async fn a_refused_recording_says_which_refusal_it_was() {
         "another account may not start this recording"
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// Each webhook LiveKit sends does its own job, and says whether to resend.
@@ -1203,8 +1203,8 @@ async fn each_webhook_kind_moves_the_row_and_answers_for_itself() {
         "an unknown egress is given back so LiveKit sends it again"
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// A full page is not the same as a page with more behind it.
@@ -1282,8 +1282,8 @@ async fn a_full_page_offers_a_cursor_only_when_more_follows() {
         "one row more than a page is another page"
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// A signature from one project does not reach another project's room.
@@ -1395,8 +1395,8 @@ async fn a_webhook_from_another_project_does_not_touch_the_room() {
         "the project's own second key opens its own room"
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// A webhook nobody signed moves nothing.
@@ -1502,8 +1502,8 @@ async fn an_unsigned_webhook_cannot_move_a_recording() {
         "a correctly signed webhook is still acted on"
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// The server starts the recording workers it is configured for.
@@ -1551,16 +1551,16 @@ async fn the_server_starts_the_recording_workers() {
     };
     for _ in 0..100 {
         if state() == "failed" {
-            server.abort();
-            remove_database(path);
+            server.shutdown().await;
+            remove_database(path).await;
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
     let reached = state();
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
     panic!("the sweeper never ran: the recording is still {reached}");
 }
 
@@ -1631,8 +1631,8 @@ async fn a_replay_read_that_fails_is_not_reported_as_missing() {
         "a failed read is not the answer 'no such recording'"
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// The history a candidate reads about their own interviews.
@@ -1716,8 +1716,8 @@ async fn history_lists_own_recordings_only() {
         );
     }
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 #[tokio::test]
@@ -1777,8 +1777,8 @@ async fn history_cross_account_denied() {
         "cursor_invalid"
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 #[tokio::test]
@@ -1852,8 +1852,8 @@ async fn history_expired_returns_410() {
         );
     }
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// The review page's read: every `avatar` row, and one editor buffer.
@@ -1974,8 +1974,8 @@ async fn history_events_avatar_history_returns_every_state() {
         "and the tail is still the tail, which is why the page does not use it"
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// A late join reads the snapshot, and only its own.
@@ -2101,8 +2101,8 @@ async fn replay_snapshot_is_owner_scoped() {
         .unwrap();
     assert_eq!(signed_out.status(), 401);
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// Ending an interview that recorded nothing says so, rather than failing.
@@ -2133,6 +2133,6 @@ async fn ending_an_interview_without_a_recording_is_a_no_op() {
         .unwrap();
     assert_eq!(again.status(), 204);
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }

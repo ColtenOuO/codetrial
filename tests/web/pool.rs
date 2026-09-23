@@ -63,8 +63,8 @@ async fn a_minted_room_name_routes_the_agent_to_the_provider_that_signed_it() {
     served.dedup();
     assert_eq!(served, vec!["eu", "primary", "us"]);
 
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 /// A fixed room name is handed to the agent verbatim, so the handler has to
@@ -100,8 +100,8 @@ async fn a_fixed_room_name_pins_the_provider_it_names() {
         assert_eq!(body["serverUrl"], "wss://eu.livekit.cloud");
     }
 
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 /// A provider failure arriving after a good completion leaves the file alone.
@@ -224,8 +224,8 @@ async fn a_late_provider_failure_does_not_fail_a_queued_recording() {
         "and it did not queue a second delivery either"
     );
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// The pool probes itself, rather than making the first candidate of every
@@ -270,9 +270,9 @@ async fn the_pool_probes_in_the_background_without_a_token_request() {
         "the pool must probe its projects without being asked for a token"
     );
 
-    server.abort();
-    stub.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    stub.shutdown().await;
+    remove_database(db_path).await;
 }
 
 /// The quota stub is a tripwire, and this is what proves the wire is live.
@@ -372,7 +372,7 @@ async fn the_quota_stub_refuses_a_probe_that_carries_the_wrong_credential() {
         .unwrap();
     assert_eq!(accepted.status(), 200);
 
-    stub.abort();
+    stub.shutdown().await;
 }
 
 /// A quota check must never make starting an interview wait for the shared
@@ -406,9 +406,9 @@ async fn a_stalled_quota_probe_does_not_delay_token_issuance() {
         "a stalled quota probe must use its short timeout"
     );
 
-    server.abort();
-    stub.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    stub.shutdown().await;
+    remove_database(db_path).await;
 }
 
 /// A project out of connection minutes refuses the candidate's WebSocket, and a
@@ -480,10 +480,10 @@ async fn a_provider_out_of_connection_minutes_is_passed_over() {
         "the room must name the project the candidate was moved to: {body}"
     );
 
-    server.abort();
-    first.abort();
-    second.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    first.shutdown().await;
+    second.shutdown().await;
+    remove_database(db_path).await;
 }
 
 /// A pinned `INTERVIEW_ROOM_NAME` is a convenience, not a promise the candidate
@@ -560,10 +560,10 @@ async fn a_pinned_room_on_an_exhausted_project_falls_back_to_the_pool() {
         "the room must name the project the candidate was moved to: {body}"
     );
 
-    server.abort();
-    first.abort();
-    second.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    first.shutdown().await;
+    second.shutdown().await;
+    remove_database(db_path).await;
 }
 
 /// A pinned room whose project still has minutes is left alone. The failover
@@ -596,9 +596,9 @@ async fn a_pinned_room_on_a_healthy_project_is_kept() {
     );
     assert_eq!(body["serverUrl"], healthy);
 
-    server.abort();
-    stub.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    stub.shutdown().await;
+    remove_database(db_path).await;
 }
 
 /// With nothing left to fail over to, the honest answer names the cause. The
@@ -632,9 +632,9 @@ async fn every_provider_out_of_minutes_is_refused_with_the_reason() {
     let body = response.json::<Value>().await.unwrap();
     assert_eq!(body["code"], "livekit_quota_exhausted", "{body}");
 
-    server.abort();
-    stub.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    stub.shutdown().await;
+    remove_database(db_path).await;
 }
 
 /// A revoked credential looks different from spent minutes to the operator,
@@ -677,9 +677,9 @@ async fn every_credential_refused_provider_is_refused_with_the_reason() {
         "the error must name the refusal rather than spending: {body}"
     );
 
-    server.abort();
-    stub.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    stub.shutdown().await;
+    remove_database(db_path).await;
 }
 
 /// A dead project must not skew the pool. It still consumes its turn in the
@@ -769,9 +769,9 @@ async fn a_dead_project_does_not_skew_the_rotation() {
     assert_eq!(served.get(&first), Some(&3), "{served:?}");
     assert_eq!(served.get(&second), Some(&3), "{served:?}");
 
-    server.abort();
-    spent_stub.abort();
-    first_stub.abort();
-    second_stub.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    spent_stub.shutdown().await;
+    first_stub.shutdown().await;
+    second_stub.shutdown().await;
+    remove_database(db_path).await;
 }

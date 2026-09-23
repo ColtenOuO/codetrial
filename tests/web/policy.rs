@@ -31,7 +31,7 @@ async fn production_promises_the_browser_it_will_stay_on_https() {
         "max-age=31536000"
     );
 
-    server.abort();
+    server.shutdown().await;
 }
 
 /// The page refuses `eval`; the one worker that cannot is served its own
@@ -76,7 +76,7 @@ async fn only_the_face_worker_may_evaluate_a_string() {
         .to_string();
     assert!(worker_policy.contains("'unsafe-eval'"), "{worker_policy}");
 
-    server.abort();
+    server.shutdown().await;
 }
 
 #[tokio::test]
@@ -172,7 +172,7 @@ async fn responses_carry_baseline_security_headers() {
     // Loopback is a local-run affordance for the check harness only.
     assert!(policy.contains("http://127.0.0.1:*"), "{policy}");
 
-    server.abort();
+    server.shutdown().await;
 }
 
 /// `web_service` is public, so its caller may not have used the binary's
@@ -198,7 +198,7 @@ async fn public_web_service_omits_malformed_livekit_origins() {
             .unwrap()
             .to_string();
         assert!(!policy.contains(forbidden), "{url}: {policy}");
-        server.abort();
+        server.shutdown().await;
     }
 }
 
@@ -229,7 +229,7 @@ async fn production_policy_names_no_loopback_origins() {
         "a server that withdrew compiled runs must not permit the origin: {policy}"
     );
 
-    server.abort();
+    server.shutdown().await;
 }
 
 /// The template Egress loads, and the policy it loads under.
@@ -277,5 +277,5 @@ async fn the_recording_template_is_reachable_under_a_policy_that_permits_its_roo
         "{policy}"
     );
 
-    server.abort();
+    server.shutdown().await;
 }

@@ -50,7 +50,7 @@ async fn static_home_markup_matches_frontend_contract() {
         );
     }
 
-    server.abort();
+    server.shutdown().await;
 }
 
 #[tokio::test]
@@ -99,7 +99,7 @@ async fn static_interview_markup_exposes_offline_surface() {
         );
     }
 
-    server.abort();
+    server.shutdown().await;
 }
 
 #[test]
@@ -702,7 +702,8 @@ async fn browser_check_accepts_running_rust_server_offline_interview() {
     config.pool = Default::default();
     let (base, server) = spawn_web_server(config).await;
     let output = tokio::task::spawn_blocking(move || {
-        Command::new("scripts/browser-check.sh")
+        Command::new("sh")
+            .arg("scripts/browser-check.sh")
             .env("CODETRIAL_WEB_URL", base)
             .env("BROWSER_CHECK_AGENT", "offline")
             .env("BROWSER_CHECK_SESSION_COOKIE", cookie)
@@ -728,8 +729,8 @@ async fn browser_check_accepts_running_rust_server_offline_interview() {
             "skipping offline browser check: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
-        server.abort();
-        remove_database(db_path);
+        server.shutdown().await;
+        remove_database(db_path).await;
         return;
     }
 
@@ -739,8 +740,8 @@ async fn browser_check_accepts_running_rust_server_offline_interview() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 #[tokio::test]
@@ -755,7 +756,8 @@ async fn browser_check_accepts_running_rust_server_with_rust_agent() {
     );
     let (base, server) = spawn_web_server(config).await;
     let output = tokio::task::spawn_blocking(move || {
-        Command::new("scripts/browser-check.sh")
+        Command::new("sh")
+            .arg("scripts/browser-check.sh")
             .env("CODETRIAL_WEB_URL", base)
             .env("BROWSER_CHECK_AGENT", "rust")
             .env("BROWSER_CHECK_SESSION_COOKIE", cookie)
@@ -771,8 +773,8 @@ async fn browser_check_accepts_running_rust_server_with_rust_agent() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 #[test]
@@ -790,7 +792,8 @@ fn browser_check_loads_credentials_for_external_rust_server() {
     )
     .unwrap();
 
-    let output = Command::new("scripts/browser-check.sh")
+    let output = Command::new("sh")
+        .arg("scripts/browser-check.sh")
         .env("CODETRIAL_WEB_URL", "http://127.0.0.1:1")
         .env("CODETRIAL_CONFIG_ENV", &env_file)
         .env("BROWSER_CHECK_AGENT", "rust")

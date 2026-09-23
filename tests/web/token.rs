@@ -527,8 +527,8 @@ async fn token_endpoint_rate_limits_a_noisy_client() {
     assert_eq!(blocked.status(), 429);
     assert_eq!(blocked.headers().get("retry-after").unwrap(), "60");
 
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 #[tokio::test]
@@ -573,8 +573,8 @@ async fn token_api_matches_frontend_contract_over_http() {
     // for a whole-minute request is the metadata value itself.
     assert_eq!(body["durationMin"], metadata["durationMin"]);
 
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 #[tokio::test]
@@ -628,8 +628,8 @@ async fn observer_is_not_the_candidate() {
         .await
         .unwrap();
     assert_eq!(denied.status(), 403);
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 /// An observer token opens the room its account paid for, and no other.
@@ -700,8 +700,8 @@ async fn observer_tokens_belong_to_the_account_that_minted_the_room() {
     assert_eq!(mine.status(), 200);
     assert_eq!(mine.json::<Value>().await.unwrap()["roomName"], room);
 
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 #[tokio::test]
@@ -750,8 +750,8 @@ async fn token_api_rejects_malformed_body_and_defaults_an_empty_one() {
     assert_eq!(metadata["candidateIdentity"], claims["sub"]);
     assert_eq!(dispatcher.rooms(), vec!["interview-local"]);
 
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 #[tokio::test]
@@ -775,8 +775,8 @@ async fn token_api_ignores_empty_and_production_fixed_room() {
             .unwrap()
             .starts_with("interview-")
     );
-    empty_server.abort();
-    remove_database(empty_db_path);
+    empty_server.shutdown().await;
+    remove_database(empty_db_path).await;
 
     let (mut production_config, production_cookie, production_db_path) =
         signed_in_web_config("production-room");
@@ -799,8 +799,8 @@ async fn token_api_ignores_empty_and_production_fixed_room() {
             .unwrap()
             .starts_with("interview-")
     );
-    production_server.abort();
-    remove_database(production_db_path);
+    production_server.shutdown().await;
+    remove_database(production_db_path).await;
 }
 
 /// The production hole this closes: `/api/token` invented a room name per
@@ -839,8 +839,8 @@ async fn token_api_staffs_every_room_it_hands_out() {
         "production must not put two candidates in one room"
     );
 
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 /// The interviewer must be sent to the same LiveKit project whose secret signed
@@ -880,8 +880,8 @@ async fn a_staffed_room_names_the_project_that_signed_the_token() {
         )]
     );
 
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 /// At capacity the honest answer is no. Handing out the token anyway puts the
@@ -915,8 +915,8 @@ async fn a_room_that_cannot_be_staffed_is_refused_rather_than_sold() {
     );
     assert!(body.get("token").is_none(), "a refused room has no token");
 
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 #[tokio::test]
@@ -943,8 +943,8 @@ async fn token_api_rejects_oversize_body() {
         "an oversize request must not staff a room"
     );
 
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 #[tokio::test]
@@ -967,8 +967,8 @@ async fn token_api_fails_closed_with_frontend_error_shape_without_livekit_creden
         "Server is missing LiveKit credentials. Create config/codetrial.env.local or set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET."
     );
 
-    server.abort();
-    remove_database(db_path);
+    server.shutdown().await;
+    remove_database(db_path).await;
 }
 
 /// Hiding the start button proves nothing: /interview is a URL anyone can open,
@@ -1036,8 +1036,8 @@ async fn token_requires_a_session_once_accounts_exist() {
     assert_eq!(signed_in.status(), 200);
     assert!(signed_in.json::<Value>().await.unwrap()["token"].is_string());
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// Interview LiveKit credentials always belong to a signed-in GitHub user.
@@ -1077,8 +1077,8 @@ async fn token_requires_recorded_github_login() {
         .unwrap();
 
     assert_eq!(signed_in.status(), 200);
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
 
 /// A recording is delivered to a person, and a typed handle is not one.
@@ -1133,6 +1133,6 @@ async fn token_requires_verified_recording_identity() {
         .unwrap();
     assert_eq!(allowed.status(), 200);
 
-    server.abort();
-    remove_database(path);
+    server.shutdown().await;
+    remove_database(path).await;
 }
