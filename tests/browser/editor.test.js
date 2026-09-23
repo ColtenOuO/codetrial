@@ -1,7 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { indentNewline, indentSelection } from "../../web/editor.js";
+import {
+  indentNewline,
+  indentSelection,
+  insertBracketPair,
+  isBracketOpenerKeystroke,
+  isBracketCloserKeystroke,
+  typeOverCloser,
+  isBackspaceKeystroke,
+  deleteEmptyPair,
+} from "../../web/editor.js";
 
 test("Enter preserves the current line's spaces and tabs", () => {
   for (const indentation of ["", "  ", "    ", "\t", "\t  "]) {
@@ -214,4 +223,103 @@ test("Tab then Shift+Tab round-trips every indentation style", () => {
         { value, start, end }, `round trip failed for ${JSON.stringify(value)} at ${start}..${end}`);
     }
   }
+});
+
+test("typing an opening bracket at a bare caret inserts the matching closer and steps inside", () => {
+  for (const [open, close] of [["(", ")"], ["{", "}"], ["[", "]"]]) {
+    assert.deepEqual(
+      insertBracketPair("call", 4, 4, open),
+      { value: `call${open}${close}`, start: 5, end: 5 }
+    );
+    assert.deepEqual(
+      insertBracketPair(`before${open}${close}after`, 7, 7, open),
+      { value: `before${open}${open}${close}${close}after`, start: 8, end: 8 }
+    );
+  }
+});
+
+test("typing an opening bracket around a selection wraps it and leaves the wrapped text selected", () => {
+  for (const [open, close] of [["(", ")"], ["{", "}"], ["[", "]"]]) {
+    assert.deepEqual(
+      insertBracketPair(`return value;`, 7, 12, open),
+      { value: `return ${open}value${close};`, start: 8, end: 13 }
+    );
+  }
+});
+
+test("typing an opening bracket in the middle of existing text only touches the selection", () => {
+  assert.deepEqual(
+    insertBracketPair("foobar", 3, 3, "("),
+    { value: "foo()bar", start: 4, end: 4 }
+  );
+  assert.deepEqual(
+    insertBracketPair("one, two", 5, 8, "["),
+    { value: "one, [two]", start: 6, end: 9 }
+  );
+});
+
+test("an opening-bracket beforeinput is a bracket keystroke", () => {
+  for (const opener of ["(", "{", "["]) {
+    assert.equal(isBracketOpenerKeystroke({ inputType: "insertText", data: opener }), true);
+  }
+});
+
+// applyEditorEdit hands execCommand the changed span -- "()" at a bare caret,
+// "(value)" around a selection -- never a bare opener, so this excludes
+// execCommand's own synthetic beforeinput on content alone.
+test("a beforeinput that is not plain bracket text is not a bracket keystroke", () => {
+  assert.equal(isBracketOpenerKeystroke({ inputType: "insertLineBreak", data: null }), false);
+  assert.equal(isBracketOpenerKeystroke({ inputType: "insertText", data: "a" }), false);
+  assert.equal(isBracketOpenerKeystroke({ inputType: "insertText", data: "(x" }), false);
+  assert.equal(isBracketOpenerKeystroke({ inputType: "insertText", data: "()" }), false);
+  assert.equal(isBracketOpenerKeystroke({ inputType: "insertText", data: "(value)" }), false);
+});
+
+test("a closing bracket is a bracket closer keystroke, anything else is not", () => {
+  for (const closer of [")", "]", "}"]) {
+    assert.equal(isBracketCloserKeystroke({ inputType: "insertText", data: closer }), true);
+  }
+  assert.equal(isBracketCloserKeystroke({ inputType: "insertText", data: "a" }), false);
+  assert.equal(isBracketCloserKeystroke({ inputType: "deleteContentBackward", data: ")" }), false);
+});
+
+test("typing a closer right before the same character steps over it instead of inserting", () => {
+  for (const [open, close] of [["(", ")"], ["{", "}"], ["[", "]"]]) {
+    assert.deepEqual(
+      typeOverCloser(`foo${open}bar${close}`, 7, 7, close),
+      { value: `foo${open}bar${close}`, start: 8, end: 8 }
+    );
+  }
+});
+
+test("typing a closer with no matching character ahead falls through to native insertion", () => {
+  assert.equal(typeOverCloser("foo(bar", 4, 4, ")"), null);
+  assert.equal(typeOverCloser("foo)bar", 3, 3, "]"), null);
+  // A selection is never a caret sitting before the closer, so it also falls
+  // through rather than swallowing whatever was selected.
+  assert.equal(typeOverCloser("foo()bar", 4, 5, ")"), null);
+});
+
+test("Backspace is a backspace keystroke, other deletions are not", () => {
+  assert.equal(isBackspaceKeystroke({ inputType: "deleteContentBackward" }), true);
+  assert.equal(isBackspaceKeystroke({ inputType: "deleteContentForward" }), false);
+});
+
+test("Backspace between a matching empty pair removes both characters", () => {
+  for (const [open, close] of [["(", ")"], ["{", "}"], ["[", "]"]]) {
+    assert.deepEqual(
+      deleteEmptyPair(`foo${open}${close}bar`, 4, 4, close),
+      { value: "foobar", start: 3, end: 3 }
+    );
+  }
+});
+
+test("Backspace elsewhere, or between a mismatched pair, falls through to native deletion", () => {
+  assert.equal(deleteEmptyPair("foobar", 3, 3), null);
+  assert.equal(deleteEmptyPair("foo(]bar", 4, 4), null);
+  assert.equal(deleteEmptyPair("foo(x)bar", 4, 4), null);
+  assert.equal(deleteEmptyPair("(", 1, 1), null);
+  // A selection is not a collapsed caret between the pair, so it also falls
+  // through rather than deleting past what was selected.
+  assert.equal(deleteEmptyPair("foo()bar", 3, 4), null);
 });

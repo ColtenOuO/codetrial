@@ -6,7 +6,16 @@ import {
   videoTrackReady,
 } from "./audio-check.js";
 import { highlight } from "./highlight.js";
-import { indentNewline, indentSelection } from "./editor.js";
+import {
+  indentNewline,
+  indentSelection,
+  insertBracketPair,
+  isBracketOpenerKeystroke,
+  isBracketCloserKeystroke,
+  typeOverCloser,
+  isBackspaceKeystroke,
+  deleteEmptyPair,
+} from "./editor.js";
 import { createDevicePool } from "./devices.js";
 import { createFaceCheck } from "./face-check.js";
 import { createMicMeter, startMediaMeter } from "./mic-meter.js";
@@ -405,10 +414,18 @@ function renderRuntimeConfig() {
     : "C, C++ and Java test runs are disabled by this server.";
 }
 
-// Assigning `value` wipes the native undo stack, and a candidate who indents
-// once has then lost their whole editing history. Route the change through the
-// browser's editing command instead, over just the span that actually changed.
-function applyIndent(next) {
+// This flag is the actual guard: set for exactly the duration of the call,
+// and checked first thing in the listener, so the synthetic beforeinput is
+// recognized by when it happens rather than by a property of
+// dubious reliability.
+let applyingProgrammaticEdit = false;
+
+// Every edit the editor makes on the candidate's behalf -- indentation, bracket
+// pairs, closer type-over, paired deletion -- lands here. Assigning `value`
+// wipes the native undo stack, so one such edit would cost the candidate their
+// whole editing history. Route the change through the browser's editing
+// command instead, over just the span that actually changed.
+function applyEditorEdit(next) {
   const editor = nodes.editor;
   const previous = editor.value;
   if (next.value === previous) {
@@ -422,9 +439,15 @@ function applyIndent(next) {
     && previous[previous.length - 1 - tail] === next.value[next.value.length - 1 - tail]) tail += 1;
   const inserted = next.value.slice(head, next.value.length - tail);
   editor.setSelectionRange(head, previous.length - tail);
-  const rewritten = inserted
-    ? document.execCommand?.("insertText", false, inserted)
-    : document.execCommand?.("delete");
+  let rewritten;
+  applyingProgrammaticEdit = true;
+  try {
+    rewritten = inserted
+      ? document.execCommand?.("insertText", false, inserted)
+      : document.execCommand?.("delete");
+  } finally {
+    applyingProgrammaticEdit = false;
+  }
   if (!rewritten) {
     editor.value = next.value;
     editor.dispatchEvent(new Event("input", { bubbles: true }));
@@ -495,12 +518,33 @@ function bindEvents() {
     tabLeavesEditor = false;
     if (!indents) return;
     event.preventDefault();
-    applyIndent(indentSelection(nodes.editor.value, nodes.editor.selectionStart, nodes.editor.selectionEnd, event.shiftKey));
+    applyEditorEdit(indentSelection(nodes.editor.value, nodes.editor.selectionStart, nodes.editor.selectionEnd, event.shiftKey));
   });
   nodes.editor.addEventListener("beforeinput", (event) => {
-    if (event.inputType !== "insertLineBreak" || event.isComposing || !event.cancelable) return;
-    event.preventDefault();
-    applyIndent(indentNewline(nodes.editor.value, nodes.editor.selectionStart, nodes.editor.selectionEnd, state.language));
+    if (applyingProgrammaticEdit || event.isComposing || !event.cancelable) return;
+    if (event.inputType === "insertLineBreak") {
+      event.preventDefault();
+      applyEditorEdit(indentNewline(nodes.editor.value, nodes.editor.selectionStart, nodes.editor.selectionEnd, state.language));
+      return;
+    }
+    if (isBracketOpenerKeystroke(event)) {
+      event.preventDefault();
+      applyEditorEdit(insertBracketPair(nodes.editor.value, nodes.editor.selectionStart, nodes.editor.selectionEnd, event.data));
+      return;
+    }
+    if (isBracketCloserKeystroke(event)) {
+      const skip = typeOverCloser(nodes.editor.value, nodes.editor.selectionStart, nodes.editor.selectionEnd, event.data);
+      if (!skip) return;
+      event.preventDefault();
+      applyEditorEdit(skip);
+      return;
+    }
+    if (isBackspaceKeystroke(event)) {
+      const removal = deleteEmptyPair(nodes.editor.value, nodes.editor.selectionStart, nodes.editor.selectionEnd);
+      if (!removal) return;
+      event.preventDefault();
+      applyEditorEdit(removal);
+    }
   });
   nodes.editor.addEventListener("input", () => {
     state.codeByLanguage[state.language] = nodes.editor.value;
