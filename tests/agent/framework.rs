@@ -14,6 +14,7 @@ use super::*;
 fn cold_restart_keeps_the_active_behavioral_round() {
     let mut state = with_written_code(RuntimeState {
         behavioral_round_started: true,
+        transcript: vec!["Jim: Tell me about a trade-off you owned.".to_string()],
         language: "javascript".to_string(),
         language_chosen: true,
         ..RuntimeState::default()
@@ -97,6 +98,24 @@ fn unpausing_without_a_cold_restart_keeps_the_short_resume_line() {
             "The interview has resumed. Continue with your REACTO step. TIMER: about 45 minutes remain on the candidate's countdown."
         )
     );
+
+    // Paused mid-answer, the same interviewer carries on in the behavioral
+    // round rather than being sent back to a REACTO step it already left.
+    let mut state = RuntimeState {
+        behavioral_round_started: true,
+        paused: true,
+        ..RuntimeState::default()
+    };
+    let resumed = apply_data_event(
+        &mut state,
+        TOPIC_CONTROL,
+        &json!({ "type": "pause_interview", "paused": false }),
+        0.0,
+    )
+    .generate_reply
+    .unwrap();
+    assert!(resumed.starts_with(&resume(true)), "{resumed}");
+    assert!(!resumed.contains("REACTO"), "{resumed}");
 }
 
 /// Coding, Test and Optimizations are checked against the editor, not taken on
@@ -325,6 +344,7 @@ fn cold_restart_names_the_reacto_steps_evidenced_rather_than_assuming_them() {
 fn cold_restart_says_none_when_the_behavioral_round_has_no_evidence_yet() {
     let state = RuntimeState {
         behavioral_round_started: true,
+        transcript: vec!["Jim: Tell me about a trade-off you owned.".to_string()],
         ..RuntimeState::default()
     };
 
@@ -332,6 +352,62 @@ fn cold_restart_says_none_when_the_behavioral_round_has_no_evidence_yet() {
         cold_restart(&state).contains("STAR parts already evidenced: none."),
         "an empty list has to be spelled, not left blank"
     );
+}
+
+/// Whether the follow-up was used, or the candidate declined, lives only in
+/// the conversation. A recovered tail that starts after the round's question
+/// cannot show either, so the one follow-up is withdrawn rather than offered
+/// to a replacement that may be reopening a declined probe.
+#[test]
+fn cold_restart_offers_the_star_follow_up_only_while_the_round_start_is_recovered() {
+    // A long coding round before the question, which the index must discount:
+    // measured from the start of the transcript, this would read as lost.
+    let mut state = RuntimeState {
+        behavioral_round_started: true,
+        transcript: vec![overflowing_turn()],
+        ..RuntimeState::default()
+    };
+    state.behavioral_round_transcript_start = state.transcript.len();
+    state.transcript.extend([
+        "Jim: Tell me about a tricky bug you tracked down.".to_string(),
+        "Candidate: I can't think of an example right now.".to_string(),
+    ]);
+    let recovered = cold_restart(&state);
+    assert!(recovered.contains("at most one neutral follow-up"));
+    assert!(recovered.contains("Never reopen an abandoned behavioral probe"));
+    assert!(recovered.contains("Candidate: I can't think of an example right now."));
+
+    state.transcript.push(overflowing_turn());
+    let lost = cold_restart(&state);
+    assert!(lost.contains("ask no follow-up and no new question"));
+    assert!(!lost.contains("at most one neutral follow-up"));
+    assert!(lost.contains("do not return to coding"));
+}
+
+/// A connection lost between the round opening and Jim's first word: the
+/// round's question was never asked, and a replacement told it was would
+/// close the round without one.
+#[test]
+fn cold_restart_asks_the_behavioral_question_the_round_opened_without() {
+    let mut state = RuntimeState {
+        behavioral_round_started: true,
+        transcript: vec!["Candidate: The map lookup is constant time.".to_string()],
+        ..RuntimeState::default()
+    };
+    state.behavioral_round_transcript_start = state.transcript.len();
+
+    let opened = cold_restart(&state);
+    assert!(opened.contains("its one STAR question has not been asked"));
+    assert!(opened.contains("Ask exactly one concise question"));
+    assert!(opened.contains("that probe stays closed: do not repeat or rephrase it"));
+    assert!(!opened.contains("was already asked"));
+
+    state
+        .transcript
+        .push("Jim: Tell me about a trade-off you owned.".to_string());
+    let asked = cold_restart(&state);
+    assert!(asked.contains("Its one STAR question was already asked"));
+    assert!(!asked.contains("Ask exactly one concise question"));
 }
 
 #[test]
@@ -747,7 +823,13 @@ fn round_transition_is_one_shot_plan_scoped_and_evidence_gated() {
             .generate_reply
             .is_none()
     );
-    let mut complete = near_time_up(with_written_code(RuntimeState::default()));
+    let mut complete = near_time_up(with_written_code(RuntimeState {
+        transcript: vec![
+            "Jim: Any time you had to debug something like this?".to_string(),
+            "Candidate: I can't think of an example right now.".to_string(),
+        ],
+        ..RuntimeState::default()
+    }));
     past_the_coding_round(&mut complete);
     for phase in ["test", "optimizations"] {
         record_framework_evidence(&mut complete, &json!({"phase":phase,"source":"candidate_speech","kind":"observed","confidence":90,"summary":format!("candidate completed {phase}")})).unwrap();
@@ -756,7 +838,9 @@ fn round_transition_is_one_shot_plan_scoped_and_evidence_gated() {
         .generate_reply
         .unwrap();
     assert!(reply.contains("completion gate passed") && reply.contains("do not return to coding"));
+    assert!(reply.contains("that probe stays closed: do not repeat or rephrase it"));
     assert!(complete.behavioral_round_started);
+    assert_eq!(complete.behavioral_round_transcript_start, 2);
     complete.code = "frozen".to_string();
     let ignored = apply_data_event(
         &mut complete,
@@ -778,6 +862,8 @@ fn round_transition_is_one_shot_plan_scoped_and_evidence_gated() {
     assert!(
         warning.contains("The behavioral round has reached the five-minute warning")
             && warning.contains("Do not return to coding")
+            && warning.contains("only if it has not already been used and not when the candidate cannot recall an example")
+            && warning.contains("Never reopen an abandoned behavioral probe")
     );
     let end = apply_data_event(
         &mut complete,

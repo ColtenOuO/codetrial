@@ -828,7 +828,7 @@ fn the_evidence_that_completes_coding_releases_the_follow_ups_once() {
         ..state.clone()
     };
     let restarted = crate::agent::cold_restart(&behavioral);
-    assert!(restarted.contains("The behavioral round is active"));
+    assert!(restarted.contains("The behavioral round has just opened"));
     assert!(
         !restarted.contains(first) && !restarted.contains("follow-ups"),
         "the behavioral round must not be pointed back at coding follow-ups"

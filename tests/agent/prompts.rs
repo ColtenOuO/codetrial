@@ -57,8 +57,8 @@ fn prompt_golden_digest_matches_versions() {
     // its hash is a string nothing checks. The pair is still asserted, because
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
-    let recorded_versions = (4, 10);
-    let recorded_digest = "82ccf2141aefffde933e84abc137f7651d0aa9e6005127e63e49414b85d387f4";
+    let recorded_versions = (5, 11);
+    let recorded_digest = "7c5db7f6e480b45c596472a02b100eefb98db942475de7848da66eddbe88bdc4";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -168,11 +168,35 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
         "Do not say goodbye first",
         "never because the candidate has gone quiet or is stuck",
         "Never reveal the private rubric",
+        // Issue 51: a behavioral question asked during coding, then declined,
+        // came back with every later editor review.
+        "Before that event, ask no behavioral, experience, or past-project question",
+        "declines to give one, or cannot share one, in either round",
+        "decline a behavioral question, in either round",
+        "reopen it after an editor update",
     ] {
         assert!(prompt.contains(safeguard), "missing safeguard: {safeguard}");
     }
     assert!(time_warning().contains("source `session_timing`, kind `skipped`"));
     assert!(wrap_up("candidate_ended").contains("source `session_timing`, kind `skipped`"));
+
+    // The timing skip is the rule and the refusal the one exception to it. A
+    // skip conditioned on the model judging that timing prevented assessment
+    // left a Result cut off by the clock with no entry at all.
+    let wrap = wrap_up("time_up");
+    assert!(wrap.contains("a short summary that the session ended before assessment, except where the candidate cannot recall an example"));
+    assert!(!wrap.contains("only if the session ending"));
+
+    // Both watchers only speak during coding, which is exactly where a stray
+    // behavioral question was being revived.
+    for watcher in [silence_nudge("  1| x = 1"), proactive_review("  1| x = 1")] {
+        assert!(
+            watcher
+                .to_lowercase()
+                .contains("never ask, repeat, or return to a behavioral or experience question"),
+            "{watcher}"
+        );
+    }
 
     let public_reactions = [
         greeting(problem),
@@ -216,6 +240,15 @@ fn report_brief_states_the_hint_rung() {
     });
     assert!(prompt.contains("candidate reached hint rung 2 of 3"));
     assert!(prompt.contains("1 hint was volunteered rather than requested"));
+
+    // A declined probe is unassessed, not failed, in both halves of the prompt.
+    assert!(prompt.contains("When the candidate cannot recall an example, declines to give one, or cannot share one, assess"));
+    assert!(prompt.contains("For an abandoned probe, use `null`"));
+    assert!(
+        prompt.contains(
+            "cannot share one; the refusal itself is not evidence of poor STAR performance"
+        )
+    );
 }
 
 #[test]
@@ -876,17 +909,17 @@ fn interview_contract_versions_are_one_closed_bundle() {
         "the bundle table has no row for {INTERVIEW_CONTRACT_BUNDLE_VERSION}"
     );
 
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 12);
-    assert_eq!(LIVE_PROMPT_VERSION, 4);
-    assert_eq!(REPORT_PROMPT_VERSION, 10);
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 13);
+    assert_eq!(LIVE_PROMPT_VERSION, 5);
+    assert_eq!(REPORT_PROMPT_VERSION, 11);
     assert_eq!(RUBRIC_VERSION, 1);
     assert_eq!(REPORT_SCHEMA_VERSION, 2);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 12,
-            "livePromptVersion": 4,
-            "reportPromptVersion": 10,
+            "bundleVersion": 13,
+            "livePromptVersion": 5,
+            "reportPromptVersion": 11,
             "rubricVersion": 1,
             "reportSchemaVersion": 2,
         })

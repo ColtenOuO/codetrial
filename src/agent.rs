@@ -28,12 +28,13 @@ pub use integrity::{sanitize_integrity_event, sanitize_test_run};
 use problems::variant_for;
 pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, find_problem, get_problem, topics_for};
 pub use prompts::{
-    InterimReviewInput, LanguageChoiceContext, ReportPromptInput, build_instructions_for_plan,
-    cold_restart, format_test_run, greeting, hint_ladder_used_text, hint_rung_text,
-    hint_rung_withheld_text, interim_review_prompt, language_choice, log_hint_text, numbered,
-    proactive_review, read_editor_text, released_follow_ups, report_prompt, rolling_assessment,
-    significant_change, silence_nudge, spoken_language, test_results_reaction,
-    test_setup_error_reaction, time_warning, unrecorded_earlier_phases, wrap_up,
+    InterimReviewInput, LanguageChoiceContext, ReportPromptInput, behavioral_time_warning,
+    build_instructions_for_plan, cold_restart, format_test_run, greeting, hint_ladder_used_text,
+    hint_rung_text, hint_rung_withheld_text, interim_review_prompt, language_choice, log_hint_text,
+    numbered, proactive_review, read_editor_text, released_follow_ups, report_prompt, resume,
+    rolling_assessment, round_skipped, round_started, significant_change, silence_nudge,
+    spoken_language, test_results_reaction, test_setup_error_reaction, time_warning,
+    unrecorded_earlier_phases, wrap_up,
 };
 pub(crate) use report::sanitize_report_candidate;
 pub use report::{
@@ -122,9 +123,9 @@ const ROUND_TRANSITION_SKEW: std::time::Duration = std::time::Duration::from_sec
 /// `the_time_warning_threshold_is_the_same_number_on_both_sides`.
 pub const TIME_WARNING_S: u64 = 300;
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 12;
-pub const LIVE_PROMPT_VERSION: u32 = 4;
-pub const REPORT_PROMPT_VERSION: u32 = 10;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 13;
+pub const LIVE_PROMPT_VERSION: u32 = 5;
+pub const REPORT_PROMPT_VERSION: u32 = 11;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 2;
 
@@ -671,6 +672,10 @@ pub struct RuntimeState {
     /// delivered warning from becoming a second interruption.
     pub time_warning_seen: bool,
     pub behavioral_round_started: bool,
+    /// Where the behavioral round begins in `transcript`. A cold restart whose
+    /// bounded tail no longer reaches back this far cannot see whether the one
+    /// follow-up was used or the candidate declined, so it asks for neither.
+    pub behavioral_round_transcript_start: usize,
     pub paused: bool,
     pub framework_evidence: Vec<FrameworkEvidence>,
     pub code: String,
@@ -785,6 +790,7 @@ impl Default for RuntimeState {
             round_transition_seen: false,
             time_warning_seen: false,
             behavioral_round_started: false,
+            behavioral_round_transcript_start: 0,
             paused: false,
             framework_evidence: Vec::new(),
             code: String::new(),
@@ -1427,28 +1433,36 @@ pub fn transcript_for_report(lines: &[String]) -> String {
 /// what stops either reader from taking the opening as missing rather than
 /// dropped. Empty in, empty out: naming that case is the caller's, because a
 /// report says nothing about it and a restart has to.
-pub fn transcript_tail(lines: &[String], mut budget: usize) -> String {
-    let mut kept = Vec::new();
-    for line in lines.iter().rev() {
-        let Some(remaining) = budget.checked_sub(line.len() + 1) else {
-            // One line can outrun the whole budget on its own. Dropping it
-            // would answer a cold restart with nothing but the notice, so keep
-            // the end of it: that is the part the conversation stopped in the
-            // middle of.
-            if kept.is_empty() {
-                kept.push(tail_within(line, budget));
-            }
-
-            // Pushed newest-first like everything else here, so the reverse
-            // below carries it to the front.
-            kept.push("(earlier conversation omitted)");
-            break;
-        };
-        budget = remaining;
-        kept.push(line.as_str());
+pub fn transcript_tail(lines: &[String], budget: usize) -> String {
+    let start = tail_start(lines, budget);
+    let mut kept = lines[start..]
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if start > 0 {
+        // One line can outrun the whole budget on its own. Dropping it would
+        // answer a cold restart with nothing but the notice, so keep the end of
+        // it: that is the part the conversation stopped in the middle of.
+        if kept.is_empty() {
+            kept.push(tail_within(&lines[start - 1], budget));
+        }
+        kept.insert(0, "(earlier conversation omitted)");
     }
-    kept.reverse();
     kept.join("\n")
+}
+
+/// The first of the whole lines `transcript_tail` keeps, each paid for with
+/// its separator. A cold restart asks this rather than counting for itself,
+/// so what it believes the replacement can see is what the replacement is
+/// shown.
+fn tail_start(lines: &[String], mut budget: usize) -> usize {
+    for (index, line) in lines.iter().enumerate().rev() {
+        match budget.checked_sub(line.len() + 1) {
+            Some(remaining) => budget = remaining,
+            None => return index + 1,
+        }
+    }
+    0
 }
 
 /// The longest suffix of `line` that starts on a character boundary and fits in

@@ -8,7 +8,7 @@ use super::{
     FrameworkEvidence, InterviewGrounding, InterviewLoop, InterviewProfile, MAX_CANDIDATE_CASES,
     MAX_INTERIM_LINE_CHARS, MAX_INTERIM_LINES_PER_REVIEW, MAX_TEST_FAILURES, Problem,
     REACTO_PHASE_IDS, RUBRIC_VERSION, RuntimeState, SILENCE_THRESHOLD_S, STAR_PHASE_IDS,
-    evidence_kind_id, evidence_source_id, framework_progress, phase_id, python_truthy,
+    evidence_kind_id, evidence_source_id, framework_progress, phase_id, python_truthy, tail_start,
     transcript_tail, truthy_string, value_string,
 };
 use crate::runtime::AGENT_NAME;
@@ -50,8 +50,16 @@ location, it is a hint: follow the hint rules and call `log_hint` with `requeste
 false."#
 }
 
-fn star_policy() -> &'static str {
-    r#"STAR BEHAVIORAL CLOSE — the spine of the behavioral round, and the axis it
+/// Every prompt that has to honour a declined behavioral probe names it in
+/// these words, so the live interviewer, its recovery and timer briefings, and
+/// the
+/// report reviewer cannot drift into different ideas of what counts as one.
+const DECLINED_PROBE: &str =
+    "the candidate cannot recall an example, declines to give one, or cannot share one";
+
+fn star_policy() -> String {
+    format!(
+        r#"STAR BEHAVIORAL CLOSE — the spine of the behavioral round, and the axis it
 is scored on. Use it only after a trusted [SYSTEM EVENT] says the behavioral round
 started because the candidate has a testable solution and has discussed
 optimization; never start it merely because those conditions appear true:
@@ -62,13 +70,24 @@ optimization; never start it merely because those conditions appear true:
 - Listen for Situation, Task, the candidate's personal Action, and Result. Name a
   part that is missing; never supply it, never suggest what it might have been,
   and never say how the answer will be scored.
-- If exactly one part is materially missing, ask at most ONE neutral follow-up. If
-  the answer only says "we", ask what the candidate personally did. For Result,
-  accept truthful qualitative impact or learning when no numeric metric exists.
+- If {DECLINED_PROBE}, in either round,
+  acknowledge briefly without pressing and silently abandon that behavioral
+  probe, including any pending follow-up. An explicit inability or refusal is
+  not a vague answer to press for detail. Do not rephrase it, ask for a replacement story, or reopen it after an editor update,
+  test result, silence, timer event, or reconnection. Missing STAR parts are not
+  unfinished business: keep any evidence already given and leave unsupported
+  parts unassessed; do not invent evidence or record refusal as `session_timing`.
+  Continue the active round without that probe; if the behavioral round has no
+  further discussion, use `end_interview` under its normal completion rules.
+- Otherwise, if exactly one part is materially missing, ask at most ONE neutral
+  follow-up. If the answer only says "we", ask what the candidate personally did.
+  For Result, accept truthful qualitative impact or learning when no numeric
+  metric exists.
 - Never invent a story, action, employer detail, or result, and never demand
   confidential information.
 - If coding is incomplete or the five-minute warning has fired, skip behavioral
   questioning. Do not rush the coding exercise to fit it in."#
+    )
 }
 
 fn numbered_list(items: &[&str]) -> String {
@@ -122,13 +141,13 @@ pub fn build_instructions_for_plan(
             "ROUND PLAN — coding only. The REACTO coding round owns all {duration_min} minutes. Never ask a behavioral question. STAR remains unassessed and must be marked skipped at session end."
         ),
         InterviewLoop::CodingBehavioral => format!(
-            "ROUND PLAN — two rounds: the REACTO coding round has {coding_minutes} minutes and the STAR behavioral reserve has {behavioral_minutes} minutes. Do not transition from coding until a trusted [SYSTEM EVENT] confirms the Test and Optimizations evidence gate passed. Once the behavioral round starts, ask exactly one question, use only prior candidate answers and trusted evidence for follow-ups, never repeat a question, and never return to coding."
+            "ROUND PLAN — two rounds: the REACTO coding round has {coding_minutes} minutes and the STAR behavioral reserve has {behavioral_minutes} minutes. Do not transition from coding until a trusted [SYSTEM EVENT] confirms the Test and Optimizations evidence gate passed. Before that event, ask no behavioral, experience, or past-project question, even when the candidate mentions a weakness or past work in passing; acknowledge it and stay on the coding step. Once the behavioral round starts, ask exactly one question, use only prior candidate answers and trusted evidence for follow-ups, never repeat a question, and never return to coding."
         ),
     };
     let star_round_policy = if interview_loop == InterviewLoop::CodingOnly {
         "STAR BEHAVIORAL ROUND — not configured. Never ask a behavioral or experience question in this session. At session end, record all STAR phases as skipped with source `session_timing`; do not score absence as candidate failure.".to_string()
     } else {
-        star_policy().to_string()
+        star_policy()
     };
     format!(
         r#"You are {AGENT_NAME}, a senior staff software engineer conducting a live, spoken,
@@ -274,7 +293,10 @@ VOICE RULES — these are hard constraints:
   again: either say the next thing, or say nothing at all. Silence is a normal
   interviewer move and repeating yourself is not. Pressing a vague answer for
   detail, as flow 3 describes, is not repeating: that is a new and narrower
-  question about what they just said, and you should still ask it.
+  question about what they just said, and you should still ask it unless they
+  explicitly cannot answer or decline a behavioral question, in either round.
+  Respect that exit and never revive the abandoned probe just because its STAR
+  evidence is missing.
 - Never reveal scores, the rubric, or hire/no-hire during the interview.
 - Never write the candidate's code for them, even if they ask directly. Decline
   warmly once and hand the decision back: "That's the part I want to see you work
@@ -534,13 +556,34 @@ pub fn cold_restart(state: &RuntimeState) -> String {
     // A closing paragraph shared by all three once told a restarted behavioral
     // round to go back to the coding follow-ups.
     let (round, next) = if state.behavioral_round_started {
-        (
-            format!(
-                "The behavioral round is active. Its one STAR question was already asked; do not ask a new question or return to coding. STAR parts already evidenced: {}.",
-                evidenced(&STAR_PHASE_IDS)
-            ),
-            "Continue with the candidate's answer and at most one neutral follow-up for a missing STAR part.".to_string(),
-        )
+        let start = state.behavioral_round_transcript_start;
+        if start >= state.transcript.len() {
+            (
+                "The behavioral round has just opened and nothing has been said in it yet, so its one STAR question has not been asked. Do not return to coding.".to_string(),
+                round_question(),
+            )
+        } else if tail_start(&state.transcript, COLD_RESTART_TRANSCRIPT_BYTES) > start {
+            // The recovered tail begins after the round's question, so whether
+            // its one follow-up was used or the candidate declined is not in
+            // it.
+            (
+                format!(
+                    "The behavioral round is active. Its one STAR question was already asked, and the recovered transcript below begins after it. STAR parts already evidenced: {}.",
+                    evidenced(&STAR_PHASE_IDS)
+                ),
+                "Whether its one follow-up was already used, or the candidate declined, cannot be seen, so ask no follow-up and no new question and do not return to coding. Let the candidate finish, then use `end_interview` under its normal completion rules.".to_string(),
+            )
+        } else {
+            (
+                format!(
+                    "The behavioral round is active. Its one STAR question was already asked; do not ask a new question or return to coding. STAR parts already evidenced: {}.",
+                    evidenced(&STAR_PHASE_IDS)
+                ),
+                format!(
+                    "Continue with the candidate's answer and at most one neutral follow-up for a missing STAR part, only if that follow-up has not already been used and not when {DECLINED_PROBE}. Never reopen an abandoned behavioral probe; if there is no further discussion, use `end_interview` under its normal completion rules."
+                ),
+            )
+        }
     } else if crate::agent::coding_round_complete(state) {
         (
             format!(
@@ -599,18 +642,58 @@ fn recent_transcript(lines: &[String]) -> String {
 
 pub fn silence_nudge(code_snapshot: &str) -> String {
     format!(
-        "[SYSTEM EVENT] The candidate has been silent AND has not typed for over {SILENCE_THRESHOLD_S:.0} seconds. Current editor contents:\n{code_snapshot}\nStep in with ONE short, friendly question about their current decision. If the editor is empty, ask them to verbalize their understanding, example, or planned algorithm—whichever they have not already explained. If code is present, ask them to narrate or test what is there and reference a line only after reading it. Do not reset them to the beginning, restate the problem, supply an example, suggest an approach, or reveal a bug."
+        "[SYSTEM EVENT] The candidate has been silent AND has not typed for over {SILENCE_THRESHOLD_S:.0} seconds. Current editor contents:\n{code_snapshot}\nStep in with ONE short, friendly question about their current decision. If the editor is empty, ask them to verbalize their understanding, example, or planned algorithm—whichever they have not already explained. If code is present, ask them to narrate or test what is there and reference a line only after reading it. Never ask, repeat, or return to a behavioral or experience question here. Do not reset them to the beginning, restate the problem, supply an example, suggest an approach, or reveal a bug."
     )
 }
 
 pub fn proactive_review(code_snapshot: &str) -> String {
     format!(
-        "[SYSTEM EVENT] Periodic editor snapshot — the candidate just finished a chunk of typing:\n{code_snapshot}\nInfer their current interview step from the whole conversation, then silently evaluate the current code. Speak only for a real bug, major conceptual pivot, completed logical block, or missing natural transition: you may ask for the reasoning behind a major change, complexity before implementation continues, or a predicted test after implementation. Ask ONE brief question and reference a line only when needed. Never reset them to problem restatement or repeat a question. If they are mid-flow and nothing important stands out, say only a barely-there acknowledgment like 'mm-hm'—or nothing. Do not reveal the bug or solution; any nudge that names or rules out an algorithm, data structure, invariant, or bug location is a hint and requires `log_hint` with `requested` false."
+        "[SYSTEM EVENT] Periodic editor snapshot — the candidate just finished a chunk of typing:\n{code_snapshot}\nInfer their current interview step from the whole conversation, then silently evaluate the current code. Speak only for a real bug, major conceptual pivot, completed logical block, or missing natural transition: you may ask for the reasoning behind a major change, complexity before implementation continues, or a predicted test after implementation. Ask ONE brief question and reference a line only when needed. Never reset them to problem restatement or repeat a question, and never ask, repeat, or return to a behavioral or experience question here. If they are mid-flow and nothing important stands out, say only a barely-there acknowledgment like 'mm-hm'—or nothing. Do not reveal the bug or solution; any nudge that names or rules out an algorithm, data structure, invariant, or bug location is a hint and requires `log_hint` with `requested` false."
     )
 }
 
 pub fn time_warning() -> String {
     "[SYSTEM EVENT] The interview timer has reached the five-minute warning. Briefly and naturally warn the candidate and give this convergence order: finish a testable core, run or describe the highest-value tests, then state time and space complexity. Two short sentences maximum. Do not start a behavioral question now. For each STAR phase not already evidenced, silently call `record_framework_evidence` once with source `session_timing`, kind `skipped`, confidence 100, and a short summary that the five-minute cutoff prevented assessment. Do not speak those calls or the checklist.".to_string()
+}
+
+/// The five-minute warning once the behavioral round owns the clock. The coding
+/// round's convergence order above would send the candidate back to the editor.
+pub fn behavioral_time_warning() -> String {
+    format!(
+        "[SYSTEM EVENT] The behavioral round has reached the five-minute warning. Do not return to coding or ask a new question. Let the candidate finish the current answer, ask at most the one permitted neutral missing-STAR follow-up, only if it has not already been used and not when {DECLINED_PROBE}, then close naturally. Never reopen an abandoned behavioral probe."
+    )
+}
+
+/// How the round's one question is chosen, for both briefings that ask it: the
+/// transition that opens the round, and a recovery that lands before it was
+/// asked. A probe declined earlier must not come back as that question.
+fn round_question() -> String {
+    format!(
+        "Ask exactly one concise question under the private STAR, profile, and document-grounding policies. If {DECLINED_PROBE} for an earlier behavioral question, that probe stays closed: do not repeat or rephrase it, and choose a clearly different theme for this round's one question."
+    )
+}
+
+/// The reserved behavioral round, opened because the coding gate passed.
+pub fn round_started() -> String {
+    format!(
+        "[SYSTEM EVENT] The trusted coding completion gate passed: Test and Optimizations both have candidate evidence. The coding round is closed. Begin the reserved behavioral round now. {} Use prior candidate answers only to deepen the follow-up; do not repeat them and do not return to coding.",
+        round_question()
+    )
+}
+
+/// The reserved behavioral round, refused because the coding gate did not pass.
+pub fn round_skipped() -> String {
+    "[SYSTEM EVENT] The behavioral reserve began, but the trusted coding completion gate did not pass because Test or Optimizations evidence is absent. Do not start STAR. Keep the candidate focused on a testable solution, highest-value tests, and justified complexity until the session ends; missing STAR phases will be marked skipped.".to_string()
+}
+
+/// The line an interviewer who was here the whole pause is told to carry on
+/// with, in the round it paused in. A cold restart gets `cold_restart` instead.
+pub fn resume(behavioral_round: bool) -> String {
+    if behavioral_round {
+        "The interview has resumed. Continue the behavioral round without returning to coding, repeating a question, or reopening an abandoned probe. If there is no further discussion, use `end_interview` under its normal completion rules.".to_string()
+    } else {
+        "The interview has resumed. Continue with your REACTO step.".to_string()
+    }
 }
 
 const NOTHING_RECORDED: &str = "(nothing recorded yet)";
@@ -628,7 +711,7 @@ pub fn wrap_up(reason: &str) -> String {
         _ => "the candidate chose to end the session",
     };
     format!(
-        "[SYSTEM EVENT] The interview is over because {why}. Do not ask a new coding or behavioral question and do not try to fill a missing interview step. For each STAR phase not already evidenced, silently call `record_framework_evidence` once with source `session_timing`, kind `skipped`, confidence 100, and a short summary that the session ended before assessment. In at most two short sentences, thank the candidate warmly and tell them their written performance report is being prepared and will appear on screen in a moment. Do not speak the evidence calls, scores, checklist, or hiring decision."
+        "[SYSTEM EVENT] The interview is over because {why}. Do not ask a new coding or behavioral question and do not try to fill a missing interview step. For each STAR phase not already evidenced, silently call `record_framework_evidence` once with source `session_timing`, kind `skipped`, confidence 100, and a short summary that the session ended before assessment, except where {DECLINED_PROBE}: leave that probe's unsupported parts unassessed and retain any evidence already given. In at most two short sentences, thank the candidate warmly and tell them their written performance report is being prepared and will appear on screen in a moment. Do not speak the evidence calls, scores, checklist, or hiring decision."
     )
 }
 
@@ -892,7 +975,9 @@ Score two independent dimensions from 0 to 100:
    optimization, and accurately answered follow-ups. Also consider completeness
    of Situation, Task, personal Action, and Result only if the interviewer actually
    asked a behavioral question. If none was asked, say behavioral communication
-   was not assessed and do not deduct for it."#,
+   was not assessed and do not deduct for it. When {DECLINED_PROBE}, assess
+   any evidence they did provide, but do not deduct for unsupported STAR parts of
+   that abandoned probe."#,
         input.duration_min,
         input.elapsed_min,
         input.problem.title,
@@ -1015,7 +1100,11 @@ For `frameworkAssessment`, include every phase exactly once in the displayed
 order. Score only what the transcript, the rolling assessment, the final code,
 or the test account actually lets you assess; use `null`, never zero, for a
 phase that was unasked, skipped, or left without evidence in any of them. In
-particular, every STAR score is `null` when no behavioral question was asked. Apply rubric version {rubric_version} consistently to every
+particular, every STAR score is `null` when no behavioral question was asked.
+For an abandoned probe, use `null` for parts left without evidence because
+{DECLINED_PROBE}; the refusal itself is not evidence of poor STAR performance. Retain scores grounded in any
+parts they did supply. Do not invent a weakness or improvement-plan item from
+those unsupported parts alone. Apply rubric version {rubric_version} consistently to every
 assessed phase: 90–100 = complete, precise, and independent; 75–89 = sound with a
 minor gap; 60–74 = partially demonstrated with a material gap; 40–59 = weak or
 substantially incomplete; 0–39 = directly observed incorrect or missing despite a

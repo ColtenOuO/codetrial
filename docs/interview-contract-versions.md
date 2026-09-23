@@ -8,10 +8,11 @@ can select it.
 
 ## The active bundle
 
-Bundle 12: live prompt 4, report prompt 10, rubric 1, report schema 2.
+Bundle 13: live prompt 5, report prompt 11, rubric 1, report schema 2.
 
 | Bundle | Introduced |
 |---|---|
+| 13 | No behavioral question is asked before the behavioral round opens, and a behavioral probe the candidate cannot recall, declines, or cannot share is abandoned in either round: editor reviews, silence nudges, the round transition, resume, timer and recovery prompts must not reopen it, and the report leaves its unsupported STAR parts unassessed rather than recording a timing skip. A recovery that lands before the behavioral question asks it, and one whose transcript no longer reaches that question withdraws the follow-up. Coding watcher prompts are suppressed during the behavioral round, and resuming preserves the active round. |
 | 12 | The interviewer records the step the candidate just finished before moving to the next, and the evidence reply that first ticks a later step names the earlier steps of the same framework still without evidence, so the candidate's step list fills in order rather than all at once. |
 | 11 | Candidate-authored test evidence includes the bounded input beside its result, so the interviewer and report reviewer can identify the case. |
 | 10 | Hints remain qualitative context for candidate independence rather than automatic numeric communication-score deductions. |
