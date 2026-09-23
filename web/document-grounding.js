@@ -163,7 +163,7 @@ function unique(values, max) {
 }
 
 function parseJd(lines) {
-  const marked = lines.filter((line) => /\b(required?|requirements?|must|should|experience|proficien|knowledge|ability)\b/i.test(line));
+  const marked = lines.filter((line) => /\b(require[sd]?|requirements?|must|should|experienced?|proficien(?:t|cy|cies)|knowledge|ability)\b/i.test(line));
   return { requirements: unique(marked, limits.requirements), skills: [], anchors: [] };
 }
 

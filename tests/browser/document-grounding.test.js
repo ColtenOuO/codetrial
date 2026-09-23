@@ -9,6 +9,26 @@ import { memoryStorage } from "./source.js";
 const file = (name, type, bytes) => ({ name, type, size: bytes.length, arrayBuffer: async () => Uint8Array.from(bytes).buffer });
 const txt = (text, name = "input.txt", type = "text/plain") => file(name, type, new TextEncoder().encode(text));
 
+test("proficiency, experience and require word forms identify job requirements", async () => {
+  const jd = await parseGroundingFile(txt([
+    "Proficient in JavaScript",
+    "Proficiency in Rust",
+    "Proficiencies in Go and Rust",
+    "PROFICIENT in SQL",
+    "Experienced with Kubernetes",
+    "Requires a degree in CS",
+    "A proficiently written introduction",
+  ].join("\n")), "jd");
+  assert.deepEqual(jd.requirements, [
+    "Proficient in JavaScript",
+    "Proficiency in Rust",
+    "Proficiencies in Go and Rust",
+    "PROFICIENT in SQL",
+    "Experienced with Kubernetes",
+    "Requires a degree in CS",
+  ]);
+});
+
 test("accepts bounded UTF-8 JD and resume candidates without selecting them", async () => {
   const jd = await parseGroundingFile(txt(Array.from({ length: 12 }, (_, i) => `Must know system ${i}`).join("\n")), "jd");
   const resume = await parseGroundingFile(txt("Skills: Rust, JS, SQL, Go, C, C++, Java, Ruby, Swift\nLed project Alpha\nBuilt project Beta"), "resume");
