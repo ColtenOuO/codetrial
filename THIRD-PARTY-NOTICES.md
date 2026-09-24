@@ -9,11 +9,12 @@ pinned files with `make verify-vendor`.
 | [LiveKit client](https://www.npmjs.com/package/livekit-client) | 2.20.0 | Apache-2.0 | Browser room client, `dist/livekit-client.umd.js` |
 | [Pyodide](https://github.com/pyodide/pyodide) | 0.26.4 | MPL-2.0 | In-browser Python runner |
 | CPython standard library | 3.12 | PSF-2.0 | Shipped inside Pyodide as `python_stdlib.zip` |
+| [pdf.js](https://github.com/mozilla/pdf.js) | 6.3.289 | Apache-2.0 | Local text extraction from JD and resume PDFs |
 | [Three.js](https://threejs.org/) | 0.185.1 | MIT | Avatar renderer |
 | [@pixiv/three-vrm](https://github.com/pixiv/three-vrm) | 3.5.5 | MIT | VRM support |
 | Seed-san, VirtualCast, Inc. | n/a | [VRM Public License 1.0](https://vrm.dev/licenses/1.0/) | Jim's avatar model, fetched by the browser, not redistributed |
 
-The MediaPipe binaries and the Pyodide binaries are fetched at build time from
+The MediaPipe binaries, the Pyodide binaries and pdf.js are fetched at build time from
 the version or commit named in their `FETCH` manifests, and accepted only when
 they match the adjacent `SHA256SUMS`. The LiveKit client and the three-vrm
 bundle are committed and pinned in place.
@@ -26,13 +27,14 @@ apply, because the model is displayed.
 
 License texts and source details are shipped with the relevant assets:
 
-- `web/vendor/LICENSE-apache-2.0.txt` (LiveKit client, MediaPipe)
+- `web/vendor/LICENSE-apache-2.0.txt` (LiveKit client, MediaPipe, pdf.js)
 - `web/vendor/avatar/LICENSE-three.txt`
 - `web/vendor/avatar/LICENSE-three-vrm.txt`
 - `web/vendor/avatar/LICENSE-jim-vrm.txt`
 - `web/vendor/avatar/NOTICE`
 - `web/vendor/avatar/README.md`
 - `web/vendor/pyodide/README.md`
+- `web/vendor/pdfjs/README.md`
 
 ## Avatar model
 

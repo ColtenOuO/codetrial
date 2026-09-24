@@ -1,0 +1,11 @@
+# Fetched at build time by scripts/fetch-vendor.sh, not committed: 1.7 MB of
+# minified JavaScript that never changes without a version bump, and a git
+# history carrying it costs every clone forever.
+#
+# First non-comment line is the base URL. Every line after it is a filename,
+# which must also appear in SHA256SUMS: the pin is the contract, this file only
+# says where to get the bytes. Bump the version here and the hashes there
+# together, and say in the commit message where the bytes came from.
+https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/
+pdf.min.mjs
+pdf.worker.min.mjs

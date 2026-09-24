@@ -179,6 +179,7 @@ globalThis.CODETRIAL_REPLAY_VERSION = 1;
 
 const STATIC_CONTENT_TYPES = {
   ".js": "text/javascript",
+  ".mjs": "text/javascript",
   ".html": "text/html",
   ".css": "text/css",
   ".wasm": "application/wasm",

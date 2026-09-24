@@ -1,6 +1,14 @@
 export const groundingStorageKey = "codetrial.interview-grounding.v1";
 export const groundingConsentVersion = 1;
 export const maxGroundingFileBytes = 64 * 1024;
+/// A PDF carries fonts and layout the text does not, so its file budget is not
+/// the text one: a two-page resume exported from a word processor is commonly
+/// a few hundred kilobytes, and one with a photo, a megabyte or two. The text
+/// that comes out of it is still held to `maxGroundingFileBytes`.
+export const maxGroundingPdfBytes = 4 * 1024 * 1024;
+/// Pages read from a PDF. A JD or a resume that runs past this has said what
+/// the heuristics below can use long before its tenth page.
+export const maxGroundingPdfPages = 10;
 // MAX_GROUNDING_TEXT_BYTES in src/agent.rs, and that is not a coincidence to
 // be maintained by memory: the server drops over-budget grounding silently.
 export const maxGroundingPacketBytes = 6 * 1024;
@@ -9,22 +17,90 @@ const encoder = new TextEncoder();
 const limits = { requirements: 8, skills: 8, anchors: 6 };
 const textLimit = 240;
 
-export async function parseGroundingFile(file, kind) {
-  if (!file) throw new Error("Choose a .txt file.");
-  if (!/\.txt$/i.test(file.name || "") || file.type !== "text/plain") {
-    throw new Error("Use a UTF-8 .txt file with text/plain type.");
-  }
-  if (file.size === 0) throw new Error("The file is empty.");
-  if (file.size > maxGroundingFileBytes) throw new Error("The file must be 64 KiB or smaller.");
-  let text;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
-  } catch {
-    throw new Error("The file is not valid UTF-8.");
-  }
+/// `extractPdfText` is a seam for the Node tests, which cannot run pdf.js; the
+/// browser always takes the default.
+export async function parseGroundingFile(file, kind, { extractPdfText = readPdfText } = {}) {
+  if (!file) throw new Error("Choose a .txt or .pdf file.");
+  const text = isPdf(file) ? await pdfFileText(file, extractPdfText) : await textFileText(file);
   const lines = normalizeLines(text);
   if (!lines.length) throw new Error("The file contains no usable text.");
   return kind === "jd" ? parseJd(lines) : parseResume(lines);
+}
+
+/// Name and type together, the same rule a .txt is held to: a file that says
+/// it is one thing and is named another is refused rather than guessed at.
+function isPdf(file) {
+  return /\.pdf$/i.test(file.name || "") && file.type === "application/pdf";
+}
+
+async function textFileText(file) {
+  if (!/\.txt$/i.test(file.name || "") || file.type !== "text/plain") {
+    throw new Error("Use a UTF-8 .txt file with text/plain type, or a PDF.");
+  }
+  if (file.size === 0) throw new Error("The file is empty.");
+  if (file.size > maxGroundingFileBytes) throw new Error("The file must be 64 KiB or smaller.");
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
+  } catch {
+    throw new Error("The file is not valid UTF-8.");
+  }
+}
+
+async function pdfFileText(file, extractPdfText) {
+  if (file.size === 0) throw new Error("The file is empty.");
+  if (file.size > maxGroundingPdfBytes) throw new Error("The PDF must be 4 MiB or smaller.");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+
+  // The header may sit anywhere in the first kilobyte. Checked here, before
+  // pdf.js is fetched at all, so a renamed file costs nothing to refuse.
+  if (!latin1(bytes.subarray(0, 1024)).includes("%PDF-")) {
+    throw new Error("The file is not a PDF.");
+  }
+  let text;
+  try {
+    text = await extractPdfText(bytes);
+  } catch (error) {
+    if (error?.name === "PasswordException") throw new Error("The PDF is password-protected.");
+    throw new Error("The PDF could not be read.");
+  }
+  if (!/\p{L}/u.test(text)) {
+    throw new Error("The PDF has no selectable text. A scanned document needs a text version.");
+  }
+  if (encoder.encode(text).length > maxGroundingFileBytes) {
+    throw new Error("The PDF's text must be 64 KiB or smaller.");
+  }
+  return text;
+}
+
+function latin1(bytes) {
+  return String.fromCharCode(...bytes);
+}
+
+/// Absolute, so the import and the worker resolve against the site rather
+/// than against this module, which is what they would do from a page under a
+/// deeper path.
+const pdfjsBase = "/vendor/pdfjs/";
+
+/// Text only: no page is drawn, so nothing pdf.js needs for drawing is
+/// fetched or vendored. See web/vendor/pdfjs/README.md for what that leaves
+/// out and why it does not matter here.
+async function readPdfText(bytes) {
+  const pdfjs = await import(`${pdfjsBase}pdf.min.mjs`);
+  pdfjs.GlobalWorkerOptions.workerSrc = `${pdfjsBase}pdf.worker.min.mjs`;
+  const task = pdfjs.getDocument({ data: bytes, isEvalSupported: false, disableFontFace: true });
+  try {
+    const doc = await task.promise;
+    const pages = [];
+    for (let number = 1; number <= Math.min(doc.numPages, maxGroundingPdfPages); number += 1) {
+      const content = await (await doc.getPage(number)).getTextContent();
+      pages.push(content.items.map((item) => (item.str ?? "") + (item.hasEOL ? "\n" : "")).join(""));
+    }
+    return pages.join("\n");
+  } finally {
+    // Ends the worker along with the document. A candidate who picks a JD
+    // and then a resume would otherwise hold two parsers for the session.
+    await task.destroy();
+  }
 }
 
 export function retainedSelection(selected, kind) {
