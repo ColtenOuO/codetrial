@@ -41,11 +41,11 @@ use ::livekit::data_stream::api::StreamTextOptions;
 use ::livekit::prelude::{DataPacket, RemoteParticipant, Room, RoomEvent, RoomOptions};
 
 use crate::agent::{
-    CANDIDATE_SPEAKER, INTERIM_CONTEXT_NOTES, InterimReviewInput, RuntimeState, SpeakerTurn,
-    WATCH_TICK_S, apply_data_event, code_head, framework_evidence_json, framework_progress,
-    interim_review_prompt, parse_participant_metadata, phase_id, read_editor_text,
-    record_framework_evidence, record_interim_notes, released_follow_ups, transcript_tail,
-    unrecorded_earlier_phases, unreviewed_from, with_timer, wrap_up,
+    CANDIDATE_SPEAKER, INTERIM_CONTEXT_NOTES, INTERVIEWER_SPEAKER, InterimReviewInput,
+    RuntimeState, SpeakerTurn, WATCH_TICK_S, apply_data_event, code_head, framework_evidence_json,
+    framework_progress, interim_review_prompt, parse_participant_metadata, phase_id,
+    read_editor_text, record_framework_evidence, record_interim_notes, released_follow_ups,
+    transcript_tail, unrecorded_earlier_phases, unreviewed_from, with_timer, wrap_up,
 };
 use crate::config::AgentConfig;
 use crate::runtime::TOPIC_CONTROL;
@@ -1717,7 +1717,7 @@ async fn on_output_transcript(
     if transcript_text(text).is_some() {
         let turn = &mut context.turns.interviewer;
         let whole = turn
-            .record(&mut context.state.transcript, "Interviewer", text)
+            .record(&mut context.state.transcript, INTERVIEWER_SPEAKER, text)
             .to_string();
         publish_transcript(room, &whole, turn.segment_id("interviewer"), false, None).await?;
     }

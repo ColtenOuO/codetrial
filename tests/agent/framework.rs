@@ -14,6 +14,7 @@ use super::*;
 fn cold_restart_keeps_the_active_behavioral_round() {
     let mut state = with_written_code(RuntimeState {
         behavioral_round_started: true,
+        transcript: vec!["Jim: Tell me about a trade-off you owned.".to_string()],
         language: "javascript".to_string(),
         language_chosen: true,
         ..RuntimeState::default()
@@ -40,9 +41,9 @@ fn cold_restart_keeps_the_active_behavioral_round() {
     let prompt = cold_restart(&state);
     assert!(prompt.contains("selected javascript in the editor"));
     assert!(prompt.contains("behavioral round is active"));
-    assert!(prompt.contains("do not ask a new question or return to coding"));
+    assert!(prompt.contains("If it was asked, do not repeat or replace it"));
     assert!(prompt.contains("STAR parts already evidenced: situation, action."));
-    assert!(prompt.contains("Continue with the candidate's answer"));
+    assert!(prompt.contains("continue with the candidate's answer"));
 }
 
 #[test]
@@ -97,6 +98,24 @@ fn unpausing_without_a_cold_restart_keeps_the_short_resume_line() {
             "The interview has resumed. Continue with your REACTO step. TIMER: about 45 minutes remain on the candidate's countdown."
         )
     );
+
+    // Paused mid-answer, the same interviewer carries on in the behavioral
+    // round rather than being sent back to a REACTO step it already left.
+    let mut state = RuntimeState {
+        behavioral_round_started: true,
+        paused: true,
+        ..RuntimeState::default()
+    };
+    let resumed = apply_data_event(
+        &mut state,
+        TOPIC_CONTROL,
+        &json!({ "type": "pause_interview", "paused": false }),
+        0.0,
+    )
+    .generate_reply
+    .unwrap();
+    assert!(resumed.starts_with(&resume(true)), "{resumed}");
+    assert!(!resumed.contains("REACTO"), "{resumed}");
 }
 
 /// Coding, Test and Optimizations are checked against the editor, not taken on
@@ -325,6 +344,7 @@ fn cold_restart_names_the_reacto_steps_evidenced_rather_than_assuming_them() {
 fn cold_restart_says_none_when_the_behavioral_round_has_no_evidence_yet() {
     let state = RuntimeState {
         behavioral_round_started: true,
+        transcript: vec!["Jim: Tell me about a trade-off you owned.".to_string()],
         ..RuntimeState::default()
     };
 
@@ -332,6 +352,205 @@ fn cold_restart_says_none_when_the_behavioral_round_has_no_evidence_yet() {
         cold_restart(&state).contains("STAR parts already evidenced: none."),
         "an empty list has to be spelled, not left blank"
     );
+}
+
+/// The recovered round's own transcript block.
+fn round_block(prompt: &str) -> &str {
+    block(prompt, "BEHAVIORAL ROUND TRANSCRIPT")
+}
+
+/// The recovered transcript block that precedes the round's.
+fn before_block(prompt: &str) -> &str {
+    block(prompt, "TRANSCRIPT BEFORE THE BEHAVIORAL ROUND")
+}
+
+fn block<'a>(prompt: &'a str, name: &str) -> &'a str {
+    let open = format!("BEGIN UNTRUSTED {name}\n");
+    let start = prompt.find(&open).expect("the block is present") + open.len();
+    let end = prompt[start..]
+        .find(&format!("\nEND UNTRUSTED {name}"))
+        .expect("the block is closed");
+    &prompt[start..start + end]
+}
+
+/// Whether the follow-up was used, or the candidate declined, lives only in
+/// the conversation. A recovered tail that starts after the round's question
+/// cannot show either, so the one follow-up is withdrawn rather than offered
+/// to a replacement that may be reopening a declined probe.
+#[test]
+fn cold_restart_offers_the_star_follow_up_only_while_the_round_start_is_recovered() {
+    // A long coding round before the question, which the index must discount:
+    // measured from the start of the transcript, this would read as lost.
+    let mut state = RuntimeState {
+        behavioral_round_started: true,
+        transcript: vec![overflowing_turn()],
+        ..RuntimeState::default()
+    };
+    state.behavioral_round_transcript_start = state.transcript.len();
+    state.transcript.extend([
+        "Jim: Tell me about a tricky bug you tracked down.".to_string(),
+        "Candidate: I can't think of an example right now.".to_string(),
+    ]);
+    let recovered = cold_restart(&state);
+    assert!(recovered.contains("at most one neutral follow-up"));
+    assert!(
+        recovered.contains("a behavioral question the candidate declined there counts as asked")
+    );
+    assert!(round_block(&recovered).contains("Candidate: I can't think of an example right now."));
+    assert_eq!(before_block(&recovered), "(earlier conversation omitted)");
+
+    state.transcript.push(overflowing_turn());
+    let lost = cold_restart(&state);
+    assert!(lost.contains("ask no follow-up and no new question"));
+    assert!(!lost.contains("at most one neutral follow-up"));
+    assert!(lost.contains("do not return to coding"));
+}
+
+/// A connection lost between the round opening and Jim's first word: the
+/// round's question was never asked, and a replacement told it was would
+/// close the round without one.
+#[test]
+fn cold_restart_asks_the_behavioral_question_the_round_opened_without() {
+    let mut state = RuntimeState {
+        behavioral_round_started: true,
+        transcript: vec!["Candidate: The map lookup is constant time.".to_string()],
+        ..RuntimeState::default()
+    };
+    state.behavioral_round_transcript_start = state.transcript.len();
+
+    let opened = cold_restart(&state);
+    assert!(opened.contains("its one STAR question has not been asked"));
+    assert!(opened.contains("Ask exactly one concise question"));
+    assert!(opened.contains("that probe stays closed: do not repeat or rephrase it"));
+    assert!(!opened.contains("was already asked"));
+
+    state
+        .transcript
+        .push("Jim: Tell me about a trade-off you owned.".to_string());
+    let asked = cold_restart(&state);
+    assert_eq!(
+        round_block(&asked),
+        "Jim: Tell me about a trade-off you owned."
+    );
+    assert_eq!(
+        before_block(&asked),
+        "Candidate: The map lookup is constant time."
+    );
+    assert!(asked.contains("If it was asked, do not repeat or replace it"));
+}
+
+#[test]
+fn cold_restart_does_not_infer_a_star_question_from_new_transcript_lines() {
+    let lines = [
+        "Candidate: Okay, sure.",
+        "Interviewer: That completes the coding discussion.",
+    ];
+    let with = |line: &str| RuntimeState {
+        behavioral_round_started: true,
+        behavioral_round_transcript_start: 1,
+        transcript: vec![
+            "Candidate: The lookup is constant time.".to_string(),
+            line.to_string(),
+        ],
+        ..RuntimeState::default()
+    };
+    for line in lines {
+        let recovered = cold_restart(&with(line));
+        assert_eq!(round_block(&recovered), line);
+        assert_eq!(
+            before_block(&recovered),
+            "Candidate: The lookup is constant time."
+        );
+        assert!(recovered.contains("If it was not asked: Ask exactly one concise question"));
+        assert!(!recovered.contains("Its one STAR question was already asked"));
+
+        // The round has a block of its own, so a refusal inside it counts as
+        // its question and one before it earns a different theme, as at the
+        // transition itself.
+        assert!(
+            recovered
+                .contains("a behavioral question the candidate declined there counts as asked")
+        );
+        assert!(recovered.contains("choose a clearly different theme"));
+    }
+
+    let mut truncated = with(lines[0]);
+    truncated.transcript.push(overflowing_turn());
+    let truncated = cold_restart(&truncated);
+    assert!(truncated.contains("Whether its one STAR question was asked cannot be established"));
+    assert!(truncated.contains("ask no follow-up and no new question"));
+}
+
+/// An interviewer turn still speaking when the round opens rewrites its own
+/// line rather than adding one, so the question can land before the recorded
+/// round start, with or without a candidate line written after it. The earlier
+/// finished turn is there so the newest interviewer line, not the first, is the
+/// one tracked.
+#[test]
+fn cold_restart_tracks_a_behavioral_question_in_an_in_flight_turn() {
+    let event = json!({"type": "round_transition", "round": "behavioral"});
+    for candidate_interleaved in [false, true] {
+        let mut state = with_written_code(RuntimeState::default());
+        past_the_coding_gate(&mut state);
+        let mut earlier = SpeakerTurn::default();
+        earlier.record(
+            &mut state.transcript,
+            "Interviewer",
+            "Walk me through your tests.",
+        );
+        earlier.finish();
+        SpeakerTurn::default().record(
+            &mut state.transcript,
+            "Candidate",
+            "Empty input returns nothing.",
+        );
+        let mut interviewer = SpeakerTurn::default();
+        interviewer.record(
+            &mut state.transcript,
+            "Interviewer",
+            "That covers the code.",
+        );
+        if candidate_interleaved {
+            SpeakerTurn::default().record(&mut state.transcript, "Candidate", "Okay.");
+        }
+        let lines = state.transcript.len();
+
+        let transition = apply_data_event(&mut state, TOPIC_CONTROL, &event, 0.0);
+        assert_eq!(transition.round_changed, Some("started"));
+        assert!(cold_restart(&state).contains("its one STAR question has not been asked"));
+
+        interviewer.record(
+            &mut state.transcript,
+            "Interviewer",
+            " Nice explanation of the complexity.",
+        );
+        let coding_tail = cold_restart(&state);
+
+        // The in-flight line itself opens the round, so it and anything written
+        // after it are the round's; the earlier finished turn stays before it.
+        let round = round_block(&coding_tail);
+        assert!(round.starts_with("Interviewer: That covers the code. Nice explanation"));
+        assert_eq!(round.contains("Candidate: Okay."), candidate_interleaved);
+        assert!(before_block(&coding_tail).contains("Interviewer: Walk me through your tests."));
+        assert!(coding_tail.contains("If it was not asked: Ask exactly one concise question"));
+        assert!(coding_tail.contains("Nice explanation of the complexity."));
+
+        interviewer.record(
+            &mut state.transcript,
+            "Interviewer",
+            " Tell me about a tricky bug you tracked down.",
+        );
+        assert_eq!(state.transcript.len(), lines);
+        let recovered = cold_restart(&state);
+        assert!(recovered.contains("If it was asked, do not repeat or replace it"));
+        assert!(round_block(&recovered).contains("Tell me about a tricky bug you tracked down."));
+        assert!(!recovered.contains("its one STAR question has not been asked"));
+
+        state.transcript.push(overflowing_turn());
+        let truncated = cold_restart(&state);
+        assert!(truncated.contains("ask no follow-up and no new question"));
+        assert!(!truncated.contains("Ask exactly one concise question"));
+    }
 }
 
 #[test]
@@ -747,16 +966,21 @@ fn round_transition_is_one_shot_plan_scoped_and_evidence_gated() {
             .generate_reply
             .is_none()
     );
-    let mut complete = near_time_up(with_written_code(RuntimeState::default()));
-    past_the_coding_round(&mut complete);
-    for phase in ["test", "optimizations"] {
-        record_framework_evidence(&mut complete, &json!({"phase":phase,"source":"candidate_speech","kind":"observed","confidence":90,"summary":format!("candidate completed {phase}")})).unwrap();
-    }
+    let mut complete = near_time_up(with_written_code(RuntimeState {
+        transcript: vec![
+            "Jim: Any time you had to debug something like this?".to_string(),
+            "Candidate: I can't think of an example right now.".to_string(),
+        ],
+        ..RuntimeState::default()
+    }));
+    past_the_coding_gate(&mut complete);
     let reply = apply_data_event(&mut complete, TOPIC_CONTROL, &event, 99.0)
         .generate_reply
         .unwrap();
     assert!(reply.contains("completion gate passed") && reply.contains("do not return to coding"));
+    assert!(reply.contains("that probe stays closed: do not repeat or rephrase it"));
     assert!(complete.behavioral_round_started);
+    assert_eq!(complete.behavioral_round_transcript_start, 2);
     complete.code = "frozen".to_string();
     let ignored = apply_data_event(
         &mut complete,
@@ -778,6 +1002,8 @@ fn round_transition_is_one_shot_plan_scoped_and_evidence_gated() {
     assert!(
         warning.contains("The behavioral round has reached the five-minute warning")
             && warning.contains("Do not return to coding")
+            && warning.contains("only if it has not already been used and not when the candidate cannot recall an example")
+            && warning.contains("Never reopen an abandoned behavioral probe")
     );
     let end = apply_data_event(
         &mut complete,

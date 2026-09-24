@@ -828,7 +828,7 @@ fn the_evidence_that_completes_coding_releases_the_follow_ups_once() {
         ..state.clone()
     };
     let restarted = crate::agent::cold_restart(&behavioral);
-    assert!(restarted.contains("The behavioral round is active"));
+    assert!(restarted.contains("The behavioral round has just opened"));
     assert!(
         !restarted.contains(first) && !restarted.contains("follow-ups"),
         "the behavioral round must not be pointed back at coding follow-ups"
@@ -977,6 +977,9 @@ fn runtime_activity_emits_periodic_prompts_and_updates_gates() {
     activity.last_agent_speech = now - past_silence;
     activity.last_nudge = now - Duration::from_secs_f64(crate::agent::SILENCE_COOLDOWN_S + 1.0);
 
+    state.behavioral_round_started = true;
+    assert!(activity.watch_prompt(&state, now).is_none());
+    state.behavioral_round_started = false;
     let prompt = activity.watch_prompt(&state, now).unwrap();
 
     assert!(prompt.contains("silent AND has not typed"));
@@ -991,6 +994,9 @@ fn runtime_activity_emits_periodic_prompts_and_updates_gates() {
         .code
         .push_str("\nseen = {}\nfor i, n in enumerate(nums):\n    pass");
 
+    state.behavioral_round_started = true;
+    assert!(activity.watch_prompt(&state, now).is_none());
+    state.behavioral_round_started = false;
     let prompt = activity.watch_prompt(&state, now).unwrap();
 
     assert!(prompt.contains("Periodic editor snapshot"));
