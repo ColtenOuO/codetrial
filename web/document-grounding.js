@@ -90,15 +90,15 @@ function latin1(bytes) {
 /// deeper path.
 const pdfjsBase = "/vendor/pdfjs/";
 
-/// Text only: no page is drawn, so nothing pdf.js needs for drawing is
-/// fetched or vendored. See web/vendor/pdfjs/README.md for what that leaves
-/// out and why it does not matter here.
 /// The names `readPdfText` tags its own refusals with, so `pdfFileText` can
 /// tell them from a file pdf.js could not parse. Exported for the tests'
 /// stand-in, which has to throw what the real one throws.
 export const pdfReaderMissing = "PdfReaderMissing";
 export const pdfTooLong = "PdfTooLong";
 
+/// Text only: no page is drawn, so nothing pdf.js needs for drawing is
+/// fetched or vendored. See web/vendor/pdfjs/README.md for what that leaves
+/// out and why it does not matter here.
 async function readPdfText(bytes) {
   // Its own failure, told apart from the file's: a deployment that never ran
   // scripts/fetch-vendor.sh has no reader to load, and the PDF is not at fault.
