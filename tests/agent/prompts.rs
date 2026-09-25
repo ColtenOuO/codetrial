@@ -57,8 +57,8 @@ fn prompt_golden_digest_matches_versions() {
     // its hash is a string nothing checks. The pair is still asserted, because
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
-    let recorded_versions = (5, 11);
-    let recorded_digest = "5f31c6f48806efb9305efb56785198ded06bcfeacf2cc5e29dbb31d83beb841c";
+    let recorded_versions = (6, 11);
+    let recorded_digest = "a8cef452df6f9c2dd743227e1012a7094a5d87953889e994e4d4e36a37b11763";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -187,8 +187,8 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
     assert!(wrap.contains("a short summary that the session ended before assessment, except where the candidate cannot recall an example"));
     assert!(!wrap.contains("only if the session ending"));
 
-    // Both watchers only speak during coding, which is exactly where a stray
-    // behavioral question was being revived.
+    // Both coding watchers speak only during coding, which is exactly where a
+    // stray behavioral question was being revived.
     for watcher in [silence_nudge("  1| x = 1"), proactive_review("  1| x = 1")] {
         assert!(
             watcher
@@ -197,6 +197,15 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
             "{watcher}"
         );
     }
+
+    // The behavioral round's own nudge must not end the interview on silence,
+    // press a declined probe, or send the candidate back to the editor.
+    let behavioral = behavioral_silence_nudge();
+    assert!(behavioral.contains("so do not use `end_interview` because of it"));
+    assert!(behavioral.contains("Otherwise, if the candidate cannot recall an example, declines"));
+    assert!(behavioral.contains("invite nothing further on that probe"));
+    assert!(behavioral.contains("return to coding"));
+    assert!(!behavioral.contains("editor contents"));
 
     let public_reactions = [
         greeting(problem),
@@ -909,16 +918,16 @@ fn interview_contract_versions_are_one_closed_bundle() {
         "the bundle table has no row for {INTERVIEW_CONTRACT_BUNDLE_VERSION}"
     );
 
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 13);
-    assert_eq!(LIVE_PROMPT_VERSION, 5);
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 14);
+    assert_eq!(LIVE_PROMPT_VERSION, 6);
     assert_eq!(REPORT_PROMPT_VERSION, 11);
     assert_eq!(RUBRIC_VERSION, 1);
     assert_eq!(REPORT_SCHEMA_VERSION, 2);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 13,
-            "livePromptVersion": 5,
+            "bundleVersion": 14,
+            "livePromptVersion": 6,
             "reportPromptVersion": 11,
             "rubricVersion": 1,
             "reportSchemaVersion": 2,

@@ -681,6 +681,16 @@ fn recent_transcript(lines: &[String]) -> String {
     tail
 }
 
+/// Its conditions come before the invitation: a model follows the first
+/// imperative it reads, and an invitation read first would press a declined
+/// probe or ask after an answer the round never requested.
+pub fn behavioral_silence_nudge() -> String {
+    format!(
+        "[SYSTEM EVENT] The behavioral round has been quiet for at least {SILENCE_THRESHOLD_S:.0} seconds. Silence alone does not mean the answer is complete or that there is nothing further to discuss, so do not use `end_interview` because of it. Use the conversation to decide which case applies, taking the first that does. If the round's one STAR question has not been asked yet: {} Otherwise, if {DECLINED_PROBE}, or the answer is already complete, invite nothing further on that probe: leave its unsupported parts unassessed, retain any evidence already given, and use `end_interview` under its normal completion rules. Otherwise, offer one brief, neutral invitation to continue the current answer, without adding a question or requesting a missing STAR part. Do not suggest an example, return to coding, or repeat or replace the round's question.",
+        round_question()
+    )
+}
+
 pub fn silence_nudge(code_snapshot: &str) -> String {
     format!(
         "[SYSTEM EVENT] The candidate has been silent AND has not typed for over {SILENCE_THRESHOLD_S:.0} seconds. Current editor contents:\n{code_snapshot}\nStep in with ONE short, friendly question about their current decision. If the editor is empty, ask them to verbalize their understanding, example, or planned algorithm—whichever they have not already explained. If code is present, ask them to narrate or test what is there and reference a line only after reading it. Never ask, repeat, or return to a behavioral or experience question here. Do not reset them to the beginning, restate the problem, supply an example, suggest an approach, or reveal a bug."
@@ -706,10 +716,10 @@ pub fn behavioral_time_warning() -> String {
 }
 
 /// The round's one question, for every briefing that may ask it: the
-/// transition that opens the round and a recovery that finds it unasked. A
-/// probe declined before the round must not come back as that question; one
-/// declined inside it already was the question, which is why a recovery
-/// states where the round begins.
+/// transition that opens the round, and a recovery or silence nudge that finds
+/// it unasked. A probe declined before the round must not come back as that
+/// question; one declined inside it already was the question, which is why a
+/// recovery states where the round begins.
 fn round_question() -> String {
     format!(
         "Ask exactly one concise question under the private STAR, profile, and document-grounding policies. If {DECLINED_PROBE} for an earlier behavioral question, that probe stays closed: do not repeat or rephrase it, and choose a clearly different theme for this round's one question."
@@ -719,6 +729,10 @@ fn round_question() -> String {
 /// Where the behavioral round begins in the transcript. An interviewer turn
 /// still in flight when the round opened keeps rewriting its own earlier line,
 /// so a change to that line since the transition moves the start back to it.
+/// Candidate lines interleaved before the transition come with it. A declined
+/// behavioral question there counts as the round's question, so the round then
+/// goes without one and its STAR parts stay unassessed: accepted over asking
+/// for another story right after a refusal.
 fn behavioral_round_start(state: &RuntimeState) -> usize {
     state
         .behavioral_round_prior_turn

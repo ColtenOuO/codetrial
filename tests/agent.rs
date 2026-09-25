@@ -191,6 +191,7 @@ fn prompt_samples() -> Value {
         "greeting": greeting(problem),
         "languageChoice": language_choice("C++", LanguageChoiceContext::Start),
         "languageSwitch": language_choice("Java", LanguageChoiceContext::SwitchWithCode),
+        "silenceBehavioral": behavioral_silence_nudge(),
         "silenceEmpty": silence_nudge("(the editor is currently empty)"),
         "silencePlan": silence_nudge("  1| # scan once with a map"),
         "silenceCode": silence_nudge("  1| def two_sum(nums, target):"),

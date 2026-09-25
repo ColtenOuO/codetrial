@@ -16,9 +16,9 @@ use std::time::{Duration, Instant};
 use crate::config::DEFAULT_MAX_INTERIM_REVIEWS;
 
 use crate::agent::{
-    RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput, candidate_lines, numbered,
-    proactive_review, significant_change, silence_nudge, timing_decision, unreviewed_from,
-    with_timer,
+    RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput, behavioral_silence_nudge,
+    candidate_lines, numbered, proactive_review, significant_change, silence_nudge,
+    timing_decision, unreviewed_from, with_timer,
 };
 
 /// How long the room has to be quiet before a pause is worth reading into.
@@ -89,6 +89,17 @@ pub(super) struct RuntimeActivity {
     /// replacing the transport under it throws the answer away on a socket
     /// nothing will ever read.
     pub(super) tool_response_outstanding: bool,
+    /// The behavioral round gets one silence nudge. Repeating it every
+    /// cooldown would keep inviting a candidate who has declined or finished.
+    pub(super) behavioral_nudged: bool,
+}
+
+/// A prompt the watcher wants spoken, and whether delivering it spends the
+/// behavioral round's one silence nudge. Carried with the text so the sender
+/// records the prompt it sent rather than inferring it from the round.
+pub(super) struct WatchPrompt {
+    pub(super) text: String,
+    pub(super) behavioral_nudge: bool,
 }
 
 /// Whether a pause landing now leaves output still on its way.
@@ -138,6 +149,7 @@ impl RuntimeActivity {
             floor: Floor::Listening,
             discarding_output: false,
             tool_response_outstanding: false,
+            behavioral_nudged: false,
 
             // Seeded at `now` rather than in the past: the first minutes of an
             // interview are the greeting and the problem statement, and there
@@ -240,10 +252,16 @@ impl RuntimeActivity {
     /// can set `last_code_change` to exactly `CODE_SETTLE` ago, but the clock
     /// read inside would already have moved past it, so a half-open window and
     /// a closed one behave identically to every test that can be written.
-    pub(super) fn watch_prompt(&mut self, state: &RuntimeState, now: Instant) -> Option<String> {
-        // Both watcher prompts ask about code; the behavioral round must not
-        // reopen coding or use an idle editor to revive an abandoned probe.
-        if state.paused || state.behavioral_round_started {
+    pub(super) fn watch_prompt(
+        &mut self,
+        state: &RuntimeState,
+        now: Instant,
+    ) -> Option<WatchPrompt> {
+        let behavioral = state.behavioral_round_started;
+
+        // The behavioral round has no reviews, so once its one nudge is spent
+        // there is nothing left to watch for.
+        if state.paused || (behavioral && self.behavioral_nudged) {
             return None;
         }
         let decision = timing_decision(&TimingInput {
@@ -264,7 +282,9 @@ impl RuntimeActivity {
             speech_gap_seconds: now
                 .duration_since(self.last_user_speech.max(self.last_agent_speech))
                 .as_secs_f64(),
-            significant_change: significant_change(&self.code_at_last_review, &state.code),
+            // Editor changes cannot reopen coding during the behavioral round.
+            significant_change: !behavioral
+                && significant_change(&self.code_at_last_review, &state.code),
         });
         if decision.update_last_nudge {
             self.last_nudge = now;
@@ -278,13 +298,19 @@ impl RuntimeActivity {
         if decision.sync_code_at_last_review {
             self.code_at_last_review = state.code.clone();
         }
-        if decision.silence_nudge {
-            return Some(with_timer(state, silence_nudge(&numbered(&state.code))));
-        }
-        if decision.proactive_review {
-            return Some(with_timer(state, proactive_review(&numbered(&state.code))));
-        }
-        None
+        let text = if decision.silence_nudge && behavioral {
+            behavioral_silence_nudge()
+        } else if decision.silence_nudge {
+            silence_nudge(&numbered(&state.code))
+        } else if decision.proactive_review {
+            proactive_review(&numbered(&state.code))
+        } else {
+            return None;
+        };
+        Some(WatchPrompt {
+            text: with_timer(state, text),
+            behavioral_nudge: decision.silence_nudge && behavioral,
+        })
     }
 }
 
