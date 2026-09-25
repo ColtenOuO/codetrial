@@ -554,6 +554,50 @@ fn cold_restart_tracks_a_behavioral_question_in_an_in_flight_turn() {
 }
 
 #[test]
+fn recovery_includes_a_refusal_interleaved_before_the_round_transition() {
+    let mut state = with_written_code(RuntimeState::default());
+    past_the_coding_gate(&mut state);
+    SpeakerTurn::default().record(
+        &mut state.transcript,
+        "Candidate",
+        "The lookup is constant time.",
+    );
+    let mut interviewer = SpeakerTurn::default();
+    interviewer.record(
+        &mut state.transcript,
+        "Interviewer",
+        "Tell me about a tricky bug.",
+    );
+    let refusal = "I cannot share that experience.";
+    SpeakerTurn::default().record(&mut state.transcript, "Candidate", refusal);
+    let transition = apply_data_event(
+        &mut state,
+        TOPIC_CONTROL,
+        &json!({"type": "round_transition", "round": "behavioral"}),
+        0.0,
+    );
+    assert_eq!(transition.round_changed, Some("started"));
+    assert_eq!(state.behavioral_round_transcript_start, 3);
+    assert!(cold_restart(&state).contains("its one STAR question has not been asked"));
+
+    interviewer.record(
+        &mut state.transcript,
+        "Interviewer",
+        " We can leave that there.",
+    );
+    let recovered = cold_restart(&state);
+    assert_eq!(
+        round_block(&recovered).trim(),
+        "Interviewer: Tell me about a tricky bug. We can leave that there.\nCandidate: I cannot share that experience."
+    );
+    assert!(!before_block(&recovered).contains(refusal));
+    assert!(before_block(&recovered).contains("The lookup is constant time."));
+    assert!(
+        recovered.contains("a behavioral question the candidate declined there counts as asked")
+    );
+}
+
+#[test]
 fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
     let cases: Value =
         serde_json::from_str(include_str!("../fixtures/framework-report-cases.json"))

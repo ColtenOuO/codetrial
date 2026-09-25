@@ -883,14 +883,34 @@ async fn on_watch_tick(
         // milliseconds, so propagating here is how a closed socket ended the
         // interview from the write side without the arm that resumes it ever
         // running.
-        if let Err(error) = context.gemini.send_text(&prompt).await {
+        if let Err(error) = send_watched_prompt(
+            context.activity,
+            &prompt,
+            context.gemini.send_text(&prompt.text),
+        )
+        .await
+        {
             eprintln!("Gemini nudge failed ({error}); waiting for the close to be reported");
             return Ok(ControlFlow::Continue(()));
         }
-        context.activity.mark_speaking();
     }
 
     Ok(ControlFlow::Continue(()))
+}
+
+/// Failed writes leave the behavioral invitation available after reconnect.
+/// Cooldowns still bound retries while the old socket reports its close.
+async fn send_watched_prompt<E>(
+    activity: &mut RuntimeActivity,
+    prompt: &WatchPrompt,
+    send: impl std::future::Future<Output = Result<(), E>>,
+) -> Result<(), E> {
+    send.await?;
+    if prompt.behavioral_nudge {
+        activity.behavioral_nudged = true;
+    }
+    activity.mark_speaking();
+    Ok(())
 }
 
 /// One Gemini event, plus the two restarts only this arm can decide.

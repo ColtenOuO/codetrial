@@ -28,13 +28,13 @@ pub use integrity::{sanitize_integrity_event, sanitize_test_run};
 use problems::variant_for;
 pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, find_problem, get_problem, topics_for};
 pub use prompts::{
-    InterimReviewInput, LanguageChoiceContext, ReportPromptInput, behavioral_time_warning,
-    build_instructions_for_plan, cold_restart, format_test_run, greeting, hint_ladder_used_text,
-    hint_rung_text, hint_rung_withheld_text, interim_review_prompt, language_choice, log_hint_text,
-    numbered, proactive_review, read_editor_text, released_follow_ups, report_prompt, resume,
-    rolling_assessment, round_skipped, round_started, significant_change, silence_nudge,
-    spoken_language, test_results_reaction, test_setup_error_reaction, time_warning,
-    unrecorded_earlier_phases, wrap_up,
+    InterimReviewInput, LanguageChoiceContext, ReportPromptInput, behavioral_silence_nudge,
+    behavioral_time_warning, build_instructions_for_plan, cold_restart, format_test_run, greeting,
+    hint_ladder_used_text, hint_rung_text, hint_rung_withheld_text, interim_review_prompt,
+    language_choice, log_hint_text, numbered, proactive_review, read_editor_text,
+    released_follow_ups, report_prompt, resume, rolling_assessment, round_skipped, round_started,
+    significant_change, silence_nudge, spoken_language, test_results_reaction,
+    test_setup_error_reaction, time_warning, unrecorded_earlier_phases, wrap_up,
 };
 pub(crate) use report::sanitize_report_candidate;
 pub use report::{
@@ -123,8 +123,8 @@ const ROUND_TRANSITION_SKEW: std::time::Duration = std::time::Duration::from_sec
 /// `the_time_warning_threshold_is_the_same_number_on_both_sides`.
 pub const TIME_WARNING_S: u64 = 300;
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 13;
-pub const LIVE_PROMPT_VERSION: u32 = 5;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 14;
+pub const LIVE_PROMPT_VERSION: u32 = 6;
 pub const REPORT_PROMPT_VERSION: u32 = 11;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 2;

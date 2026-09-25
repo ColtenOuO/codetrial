@@ -972,17 +972,13 @@ fn runtime_activity_emits_periodic_prompts_and_updates_gates() {
     // failed the day the threshold moved, which is the one change it has
     // nothing to say about.
     let past_silence = Duration::from_secs_f64(crate::agent::SILENCE_THRESHOLD_S + 1.0);
-    activity.last_code_change = now - past_silence;
-    activity.last_user_speech = now - past_silence;
-    activity.last_agent_speech = now - past_silence;
+    quiet_since(&mut activity, now - past_silence);
     activity.last_nudge = now - Duration::from_secs_f64(crate::agent::SILENCE_COOLDOWN_S + 1.0);
 
-    state.behavioral_round_started = true;
-    assert!(activity.watch_prompt(&state, now).is_none());
-    state.behavioral_round_started = false;
     let prompt = activity.watch_prompt(&state, now).unwrap();
 
-    assert!(prompt.contains("silent AND has not typed"));
+    assert!(prompt.text.contains("silent AND has not typed"));
+    assert!(!prompt.behavioral_nudge);
     assert!(activity.watch_prompt(&state, now).is_none());
 
     activity.last_code_change = now - CODE_SETTLE - Duration::from_secs(1);
@@ -999,9 +995,132 @@ fn runtime_activity_emits_periodic_prompts_and_updates_gates() {
     state.behavioral_round_started = false;
     let prompt = activity.watch_prompt(&state, now).unwrap();
 
-    assert!(prompt.contains("Periodic editor snapshot"));
+    assert!(prompt.text.contains("Periodic editor snapshot"));
+    assert!(!prompt.behavioral_nudge);
     assert_eq!(activity.code_at_last_review, state.code);
     assert!(activity.watch_prompt(&state, now).is_none());
+}
+
+/// Every timestamp the watcher reads as activity, set to one instant.
+fn quiet_since(activity: &mut RuntimeActivity, at: Instant) {
+    activity.last_code_change = at;
+    activity.last_user_speech = at;
+    activity.last_agent_speech = at;
+}
+
+#[test]
+fn behavioral_silence_nudge_waits_for_quiet_and_leaves_the_editor_out() {
+    let now = Instant::now();
+    let mut activity = RuntimeActivity::new(now);
+    let mut state = RuntimeState {
+        behavioral_round_started: true,
+        code: "editor sentinel".to_string(),
+        ..RuntimeState::default()
+    };
+    let threshold = Duration::from_secs_f64(crate::agent::SILENCE_THRESHOLD_S);
+    let cooldown = Duration::from_secs_f64(crate::agent::SILENCE_COOLDOWN_S);
+    quiet_since(&mut activity, now - threshold);
+    activity.last_nudge = now - cooldown;
+
+    state.paused = true;
+    assert!(activity.watch_prompt(&state, now).is_none());
+    state.paused = false;
+    for floor in [Floor::Speaking, Floor::AwaitingPlayout] {
+        activity.floor = floor;
+        assert!(activity.watch_prompt(&state, now).is_none());
+    }
+    activity.floor = Floor::Listening;
+
+    // The candidate, the interviewer, and the editor each keep the room busy.
+    let just_inside = now - threshold + Duration::from_millis(1);
+    let recent: [fn(&mut RuntimeActivity, Instant); 3] = [
+        |activity, at| activity.last_user_speech = at,
+        |activity, at| activity.last_agent_speech = at,
+        |activity, at| activity.last_code_change = at,
+    ];
+    for touch in recent {
+        touch(&mut activity, just_inside);
+        assert!(activity.watch_prompt(&state, now).is_none());
+        quiet_since(&mut activity, now - threshold);
+    }
+
+    let last_review = activity.last_review;
+    let prompt = activity
+        .watch_prompt(&state, now)
+        .expect("quiet behavioral answer gets a nudge");
+    assert_eq!(
+        prompt.text,
+        crate::agent::with_timer(&state, crate::agent::behavioral_silence_nudge())
+    );
+    assert!(prompt.behavioral_nudge);
+    assert!(!prompt.text.contains("editor sentinel"));
+    assert_eq!(activity.last_nudge, now);
+    assert_eq!(activity.last_interjection, now);
+    assert_eq!(activity.last_review, last_review);
+    assert!(activity.code_at_last_review.is_empty());
+    assert!(
+        activity
+            .watch_prompt(&state, now + cooldown - Duration::from_millis(1))
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn only_a_delivered_behavioral_nudge_spends_the_round() {
+    let now = Instant::now();
+    let mut activity = RuntimeActivity::new(now);
+    let mut state = RuntimeState {
+        behavioral_round_started: true,
+        ..RuntimeState::default()
+    };
+    let cooldown = Duration::from_secs_f64(crate::agent::SILENCE_COOLDOWN_S);
+    quiet_since(
+        &mut activity,
+        now - Duration::from_secs_f64(crate::agent::SILENCE_THRESHOLD_S),
+    );
+    activity.last_nudge = now - cooldown;
+
+    let coding = WatchPrompt {
+        text: String::new(),
+        behavioral_nudge: false,
+    };
+    send_watched_prompt(&mut activity, &coding, async {
+        Ok::<(), std::io::Error>(())
+    })
+    .await
+    .unwrap();
+    assert!(!activity.behavioral_nudged);
+    assert_eq!(activity.floor, Floor::Speaking);
+    activity.floor = Floor::Listening;
+
+    let prompt = activity.watch_prompt(&state, now).unwrap();
+    let failed = send_watched_prompt(&mut activity, &prompt, async {
+        Err::<(), _>(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "closed socket",
+        ))
+    })
+    .await;
+    assert_eq!(failed.unwrap_err().kind(), std::io::ErrorKind::BrokenPipe);
+    assert!(!activity.behavioral_nudged);
+    assert_eq!(activity.floor, Floor::Listening);
+
+    clear_abandoned_socket_work(&mut state, &mut activity);
+    let prompt = activity
+        .watch_prompt(&state, now + cooldown)
+        .expect("a nudge that never reached Gemini is offered again");
+    send_watched_prompt(&mut activity, &prompt, async {
+        Ok::<(), std::io::Error>(())
+    })
+    .await
+    .unwrap();
+    assert!(activity.behavioral_nudged);
+    assert_eq!(activity.floor, Floor::Speaking);
+    activity.floor = Floor::Listening;
+
+    // One delivered nudge per round, including after a connection replacement.
+    clear_abandoned_socket_work(&mut state, &mut activity);
+    assert!(activity.watch_prompt(&state, now + cooldown * 2).is_none());
 }
 
 /// The point of CODE_SETTLE. Without it the whole gate can be reverted to a
@@ -1036,7 +1155,7 @@ fn recent_typing_holds_off_the_periodic_review() {
     let prompt = activity
         .watch_prompt(&state, now)
         .expect("an edit exactly CODE_SETTLE old has settled; the review may take the floor");
-    assert!(prompt.contains("Periodic editor snapshot"));
+    assert!(prompt.text.contains("Periodic editor snapshot"));
 }
 
 #[test]
