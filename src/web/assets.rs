@@ -493,7 +493,10 @@ pub(crate) fn content_type(path: &Path) -> Option<HeaderValue> {
     let value = match path.extension().and_then(|extension| extension.to_str()) {
         Some("css") => "text/css; charset=utf-8",
         Some("html") => "text/html; charset=utf-8",
-        Some("js") => "text/javascript; charset=utf-8",
+
+        // `.mjs` is pdf.js's own name for its API and worker. A module script
+        // served as anything but JavaScript is refused, not sniffed.
+        Some("js" | "mjs") => "text/javascript; charset=utf-8",
         Some("json") => "application/json",
 
         // `WebAssembly.instantiateStreaming` refuses anything that is not

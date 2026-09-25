@@ -215,16 +215,31 @@ async fn vendored_assets_are_served_typed_and_cached() {
 
     for (file, content_type) in [
         // `WebAssembly.instantiateStreaming` refuses anything else.
-        ("face_detection_solution_wasm_bin.wasm", "application/wasm"),
         (
-            "face_detection_short_range.tflite",
+            "face-detection/face_detection_solution_wasm_bin.wasm",
+            "application/wasm",
+        ),
+        (
+            "face-detection/face_detection_short_range.tflite",
             "application/octet-stream",
         ),
-        ("face_detection_short.binarypb", "application/octet-stream"),
-        ("face_detection.js", "text/javascript; charset=utf-8"),
+        (
+            "face-detection/face_detection_short.binarypb",
+            "application/octet-stream",
+        ),
+        (
+            "face-detection/face_detection.js",
+            "text/javascript; charset=utf-8",
+        ),
+        // A module script, and the Worker pdf.js starts from the other, are
+        // refused outright under any type that is not JavaScript: a PDF chosen
+        // in the lobby would fail to open with nothing but a console line to
+        // say why.
+        ("pdfjs/pdf.min.mjs", "text/javascript; charset=utf-8"),
+        ("pdfjs/pdf.worker.min.mjs", "text/javascript; charset=utf-8"),
     ] {
         let response = client
-            .get(format!("{base}/vendor/face-detection/{file}"))
+            .get(format!("{base}/vendor/{file}"))
             .send()
             .await
             .unwrap();

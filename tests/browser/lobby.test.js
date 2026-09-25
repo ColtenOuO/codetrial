@@ -381,6 +381,100 @@ lobbyTest("loading a resume keeps the JD requirements already checked", async (p
   assert.deepEqual(await jd.evaluateAll((boxes) => boxes.map((box) => box.checked)), [false, true]);
 });
 
+/// A PDF built here rather than committed: one page per entry of `pages`, each
+/// line a text-showing operator in the standard Helvetica. What matters is
+/// that its text is only reachable through pdf.js, so a pass means the
+/// vendored parser loaded, ran its worker and found the lines.
+function pdfOf(pages) {
+  // Written out as latin1 below, which keeps only the low byte of anything
+  // wider: a test that used other text would get a different PDF than it wrote.
+  const wide = pages.flat().find((line) => /[^\u0000-\u00ff]/.test(line));
+  if (wide) throw new Error(`pdfOf writes Latin-1 only: ${wide}`);
+  const escape = (line) => line.replace(/[\\()]/g, (char) => `\\${char}`);
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    `<< /Type /Pages /Kids [${pages.map((_, index) => `${4 + index * 2} 0 R`).join(" ")}] /Count ${pages.length} >>`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  for (const [index, lines] of pages.entries()) {
+    const content = `BT /F1 12 Tf 16 TL 72 720 Td ${lines.map((line) => `(${escape(line)}) Tj T*`).join(" ")} ET`;
+    objects.push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + index * 2} 0 R >>`,
+      `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+    );
+  }
+  let body = "%PDF-1.4\n";
+  const offsets = objects.map((object, index) => {
+    const offset = body.length;
+    body += `${index + 1} 0 obj\n${object}\nendobj\n`;
+    return offset;
+  });
+  const xref = body.length;
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  body += offsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("");
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(body, "latin1");
+}
+
+lobbyTest("a resume and a JD read out of PDFs with the vendored pdf.js", async (page) => {
+  await lobby(page);
+  await page.click("details.interview-context summary");
+  const asPdf = (name, pages) => ({ name, mimeType: "application/pdf", buffer: pdfOf(pages) });
+
+  await page.setInputFiles("#grounding-resume", asPdf("resume.pdf", [
+    ["Skills: Rust, C, Python", "Led the (key-update) rollback fix"],
+    ["Built a parser"],
+  ]));
+  await page.locator('#grounding-choices input[data-group="anchors"]').nth(1).waitFor();
+  await page.setInputFiles("#grounding-jd", asPdf("jd.pdf", [["Must know Rust"]]));
+  await page.locator('#grounding-choices input[data-group="requirements"]').first().waitFor();
+
+  // Both pages, lines kept apart, and the escaped parentheses read back as
+  // the text the candidate wrote.
+  assert.deepEqual(await groundingText(page), [
+    "Must know Rust",
+    "Rust", "C", "Python",
+    "Led the (key-update) rollback fix", "Built a parser",
+  ]);
+  assert.match(await page.locator("#grounding-resume-status").textContent(), /^Parsed locally/);
+});
+
+lobbyTest("a PDF the platform types as something else is still read", async (page) => {
+  await lobby(page);
+  await page.click("details.interview-context summary");
+  await page.setInputFiles("#grounding-jd", { name: "jd.pdf", mimeType: "application/octet-stream", buffer: pdfOf([["Must know Rust"]]) });
+  await page.locator('#grounding-choices input[data-group="requirements"]').first().waitFor();
+  assert.deepEqual(await groundingText(page), ["Must know Rust"]);
+});
+
+lobbyTest("a PDF over the page limit is refused with its page count", async (page) => {
+  await lobby(page);
+  await page.click("details.interview-context summary");
+  const pages = Array.from({ length: 11 }, (_, index) => [`Must know topic ${index}`]);
+  await page.setInputFiles("#grounding-jd", { name: "long.pdf", mimeType: "application/pdf", buffer: pdfOf(pages) });
+  await settles(page, () => /11 pages/.test(document.querySelector("#grounding-jd-status").textContent));
+  assert.match(await page.locator("#grounding-jd-status").textContent(), /11 pages/);
+  assert.deepEqual(await groundingText(page), []);
+});
+
+lobbyTest("a missing PDF reader is reported as the reader, not the file", async (page) => {
+  failing.add("/vendor/pdfjs/pdf.min.mjs");
+  await lobby(page);
+  await page.click("details.interview-context summary");
+  await page.setInputFiles("#grounding-jd", { name: "jd.pdf", mimeType: "application/pdf", buffer: pdfOf([["Must know Rust"]]) });
+  await settles(page, () => /reader did not load/.test(document.querySelector("#grounding-jd-status").textContent));
+  assert.match(await page.locator("#grounding-jd-status").textContent(), /reader did not load/);
+});
+
+lobbyTest("a PDF with no text layer says so instead of offering nothing", async (page) => {
+  await lobby(page);
+  await page.click("details.interview-context summary");
+  await page.setInputFiles("#grounding-resume", { name: "scan.pdf", mimeType: "application/pdf", buffer: pdfOf([[]]) });
+  await settles(page, () => /selectable text/.test(document.querySelector("#grounding-resume-status").textContent));
+  assert.match(await page.locator("#grounding-resume-status").textContent(), /selectable text/);
+  assert.deepEqual(await groundingText(page), []);
+});
+
 async function holdSlowRead(page) {
   await page.evaluate(() => {
     const read = Blob.prototype.arrayBuffer;

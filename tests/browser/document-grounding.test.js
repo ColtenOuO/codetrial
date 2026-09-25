@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  consumeGroundingPacket, groundingStorageKey, maxGroundingFileBytes, maxGroundingPacketBytes,
+  consumeGroundingPacket, groundingStorageKey, maxGroundingFileBytes, maxGroundingPacketBytes, maxGroundingPdfBytes,
+  pdfReaderMissing, pdfTooLong,
   groundingConsentVersion, parseGroundingFile, retainedSelection, selectedGroundingPacket, storeGroundingPacket,
 } from "../../web/document-grounding.js";
 import { memoryStorage } from "./source.js";
@@ -21,6 +22,80 @@ test("accepts bounded UTF-8 JD and resume candidates without selecting them", as
 test("rejects unsupported, spoofed, empty, oversized, and invalid UTF-8 files", async () => {
   for (const bad of [txt("ok", "a.pdf"), txt("ok", "a.txt", "application/pdf"), file("a.txt", "text/plain", []), file("a.txt", "text/plain", new Uint8Array(maxGroundingFileBytes + 1)), file("a.txt", "text/plain", [0xff])]) {
     await assert.rejects(parseGroundingFile(bad, "jd"));
+  }
+});
+
+// pdf.js does not run under Node, so these stand in for it and cover what
+// happens around the extraction; tests/browser/lobby.test.js runs the real one.
+const pdfBytes = (body = "") => new TextEncoder().encode(`%PDF-1.7\n${body}`);
+const pdf = (bytes = pdfBytes(), name = "resume.pdf", type = "application/pdf") => file(name, type, bytes);
+const extracting = (text) => {
+  const calls = [];
+  const extractPdfText = async (bytes) => {
+    calls.push(bytes);
+    if (text instanceof Error) throw text;
+    return text;
+  };
+  return { calls, options: { extractPdfText } };
+};
+
+test("a PDF's extracted text goes through the same heuristics as a .txt", async () => {
+  const { calls, options } = extracting("Skills: Rust, C\nLed project Alpha\n");
+  const resume = await parseGroundingFile(pdf(), "resume", options);
+  assert.deepEqual(resume.skills, ["Rust", "C"]);
+  assert.deepEqual(resume.anchors, ["Led project Alpha"]);
+  assert.equal(calls.length, 1);
+  assert.deepEqual([...calls[0].subarray(0, 5)], [...new TextEncoder().encode("%PDF-")]);
+});
+
+test("a PDF header anywhere in the first kilobyte is accepted, and none is not", async () => {
+  const late = new Uint8Array(1100);
+  late.set(new TextEncoder().encode("%PDF-1.4"), 1000);
+  const { options } = extracting("Must know Rust");
+  assert.deepEqual((await parseGroundingFile(pdf(late), "jd", options)).requirements, ["Must know Rust"]);
+
+  // Refused before pdf.js is asked, so a renamed file never costs its download.
+  const missing = new Uint8Array(1100);
+  missing.set(new TextEncoder().encode("%PDF-1.4"), 1024);
+  const { calls, options: never } = extracting("Must know Rust");
+  await assert.rejects(parseGroundingFile(pdf(missing), "jd", never), /not a PDF/);
+  assert.equal(calls.length, 0);
+});
+
+test("a .pdf is judged by its header, whatever type the browser reports", async () => {
+  // An OS with no PDF handler registered reports an empty type, and nothing
+  // the candidate can do to the file changes it.
+  for (const type of ["", "application/octet-stream", "text/plain"]) {
+    const { calls, options } = extracting("Must know Rust");
+    assert.deepEqual((await parseGroundingFile(pdf(pdfBytes(), "resume.pdf", type), "jd", options)).requirements, ["Must know Rust"]);
+    assert.equal(calls.length, 1, type);
+  }
+  // Named .pdf and not one: told so, rather than sent to the .txt rules.
+  const { calls, options } = extracting("Must know Rust");
+  await assert.rejects(
+    parseGroundingFile(pdf(new TextEncoder().encode("Must know Rust"), "resume.pdf", ""), "jd", options),
+    /not a PDF/,
+  );
+  // The type alone does not make a .txt into a PDF.
+  await assert.rejects(parseGroundingFile(pdf(pdfBytes(), "resume.txt", "application/pdf"), "jd", options), /\.txt/);
+  assert.equal(calls.length, 0);
+});
+
+test("empty, oversized, locked, broken and image-only PDFs are refused with a reason", async () => {
+  const cases = [
+    [pdf(new Uint8Array()), "Must know Rust", /empty/],
+    [pdf(new Uint8Array(maxGroundingPdfBytes + 1)), "Must know Rust", /4 MiB/],
+    [pdf(), Object.assign(new Error("No password given"), { name: "PasswordException" }), /password-protected/],
+    [pdf(), new Error("Invalid PDF structure."), /could not be read/],
+    // The reader itself missing is not the file's fault, and says so.
+    [pdf(), Object.assign(new Error("pdf.js did not load"), { name: pdfReaderMissing }), /reader did not load/],
+    [pdf(), Object.assign(new Error("too many pages"), { name: pdfTooLong, pages: 12 }), /12 pages/],
+    // A scan: pages with no text layer, or only page numbers.
+    [pdf(), "\n\n1\n2\n", /no selectable text/],
+    [pdf(), `Must know Rust\n${"x".repeat(maxGroundingFileBytes)}`, /64 KiB/],
+  ];
+  for (const [input, text, message] of cases) {
+    await assert.rejects(parseGroundingFile(input, "jd", extracting(text).options), message);
   }
 });
 
