@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   consumeGroundingPacket, groundingStorageKey, maxGroundingFileBytes, maxGroundingPacketBytes, maxGroundingPdfBytes,
+  pdfReaderMissing, pdfTooLong,
   groundingConsentVersion, parseGroundingFile, retainedSelection, selectedGroundingPacket, storeGroundingPacket,
 } from "../../web/document-grounding.js";
 import { memoryStorage } from "./source.js";
@@ -61,9 +62,21 @@ test("a PDF header anywhere in the first kilobyte is accepted, and none is not",
   assert.equal(calls.length, 0);
 });
 
-test("a PDF is identified by name and type together", async () => {
+test("a .pdf is judged by its header, whatever type the browser reports", async () => {
+  // An OS with no PDF handler registered reports an empty type, and nothing
+  // the candidate can do to the file changes it.
+  for (const type of ["", "application/octet-stream", "text/plain"]) {
+    const { calls, options } = extracting("Must know Rust");
+    assert.deepEqual((await parseGroundingFile(pdf(pdfBytes(), "resume.pdf", type), "jd", options)).requirements, ["Must know Rust"]);
+    assert.equal(calls.length, 1, type);
+  }
+  // Named .pdf and not one: told so, rather than sent to the .txt rules.
   const { calls, options } = extracting("Must know Rust");
-  await assert.rejects(parseGroundingFile(pdf(pdfBytes(), "resume.pdf", "text/plain"), "jd", options), /\.txt/);
+  await assert.rejects(
+    parseGroundingFile(pdf(new TextEncoder().encode("Must know Rust"), "resume.pdf", ""), "jd", options),
+    /not a PDF/,
+  );
+  // The type alone does not make a .txt into a PDF.
   await assert.rejects(parseGroundingFile(pdf(pdfBytes(), "resume.txt", "application/pdf"), "jd", options), /\.txt/);
   assert.equal(calls.length, 0);
 });
@@ -74,6 +87,9 @@ test("empty, oversized, locked, broken and image-only PDFs are refused with a re
     [pdf(new Uint8Array(maxGroundingPdfBytes + 1)), "Must know Rust", /4 MiB/],
     [pdf(), Object.assign(new Error("No password given"), { name: "PasswordException" }), /password-protected/],
     [pdf(), new Error("Invalid PDF structure."), /could not be read/],
+    // The reader itself missing is not the file's fault, and says so.
+    [pdf(), Object.assign(new Error("pdf.js did not load"), { name: pdfReaderMissing }), /reader did not load/],
+    [pdf(), Object.assign(new Error("too many pages"), { name: pdfTooLong, pages: 12 }), /12 pages/],
     // A scan: pages with no text layer, or only page numbers.
     [pdf(), "\n\n1\n2\n", /no selectable text/],
     [pdf(), `Must know Rust\n${"x".repeat(maxGroundingFileBytes)}`, /64 KiB/],

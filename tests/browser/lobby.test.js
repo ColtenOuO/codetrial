@@ -386,6 +386,10 @@ lobbyTest("loading a resume keeps the JD requirements already checked", async (p
 /// that its text is only reachable through pdf.js, so a pass means the
 /// vendored parser loaded, ran its worker and found the lines.
 function pdfOf(pages) {
+  // Written out as latin1 below, which keeps only the low byte of anything
+  // wider: a test that used other text would get a different PDF than it wrote.
+  const wide = pages.flat().find((line) => /[^\u0000-\u00ff]/.test(line));
+  if (wide) throw new Error(`pdfOf writes Latin-1 only: ${wide}`);
   const escape = (line) => line.replace(/[\\()]/g, (char) => `\\${char}`);
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
@@ -435,11 +439,39 @@ lobbyTest("a resume and a JD read out of PDFs with the vendored pdf.js", async (
   assert.match(await page.locator("#grounding-resume-status").textContent(), /^Parsed locally/);
 });
 
+lobbyTest("a PDF the platform types as something else is still read", async (page) => {
+  await lobby(page);
+  await page.click("details.interview-context summary");
+  await page.setInputFiles("#grounding-jd", { name: "jd.pdf", mimeType: "application/octet-stream", buffer: pdfOf([["Must know Rust"]]) });
+  await page.locator('#grounding-choices input[data-group="requirements"]').first().waitFor();
+  assert.deepEqual(await groundingText(page), ["Must know Rust"]);
+});
+
+lobbyTest("a PDF over the page limit is refused with its page count", async (page) => {
+  await lobby(page);
+  await page.click("details.interview-context summary");
+  const pages = Array.from({ length: 11 }, (_, index) => [`Must know topic ${index}`]);
+  await page.setInputFiles("#grounding-jd", { name: "long.pdf", mimeType: "application/pdf", buffer: pdfOf(pages) });
+  await settles(page, () => /11 pages/.test(document.querySelector("#grounding-jd-status").textContent));
+  assert.match(await page.locator("#grounding-jd-status").textContent(), /11 pages/);
+  assert.deepEqual(await groundingText(page), []);
+});
+
+lobbyTest("a missing PDF reader is reported as the reader, not the file", async (page) => {
+  failing.add("/vendor/pdfjs/pdf.min.mjs");
+  await lobby(page);
+  await page.click("details.interview-context summary");
+  await page.setInputFiles("#grounding-jd", { name: "jd.pdf", mimeType: "application/pdf", buffer: pdfOf([["Must know Rust"]]) });
+  await settles(page, () => /reader did not load/.test(document.querySelector("#grounding-jd-status").textContent));
+  assert.match(await page.locator("#grounding-jd-status").textContent(), /reader did not load/);
+});
+
 lobbyTest("a PDF with no text layer says so instead of offering nothing", async (page) => {
   await lobby(page);
   await page.click("details.interview-context summary");
   await page.setInputFiles("#grounding-resume", { name: "scan.pdf", mimeType: "application/pdf", buffer: pdfOf([[]]) });
   await settles(page, () => /selectable text/.test(document.querySelector("#grounding-resume-status").textContent));
+  assert.match(await page.locator("#grounding-resume-status").textContent(), /selectable text/);
   assert.deepEqual(await groundingText(page), []);
 });
 

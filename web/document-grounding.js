@@ -6,8 +6,9 @@ export const maxGroundingFileBytes = 64 * 1024;
 /// a few hundred kilobytes, and one with a photo, a megabyte or two. The text
 /// that comes out of it is still held to `maxGroundingFileBytes`.
 export const maxGroundingPdfBytes = 4 * 1024 * 1024;
-/// Pages read from a PDF. A JD or a resume that runs past this has said what
-/// the heuristics below can use long before its tenth page.
+/// Pages a PDF may have. A JD or a resume that runs past this has said what
+/// the heuristics below can use long before its tenth page, and a longer one
+/// is refused with its page count rather than read in part.
 export const maxGroundingPdfPages = 10;
 // MAX_GROUNDING_TEXT_BYTES in src/agent.rs, and that is not a coincidence to
 // be maintained by memory: the server drops over-budget grounding silently.
@@ -27,10 +28,12 @@ export async function parseGroundingFile(file, kind, { extractPdfText = readPdfT
   return kind === "jd" ? parseJd(lines) : parseResume(lines);
 }
 
-/// Name and type together, the same rule a .txt is held to: a file that says
-/// it is one thing and is named another is refused rather than guessed at.
+/// By name alone. The type is whatever the browser's platform has registered
+/// for the extension, which is an empty string on a system with no PDF
+/// handler, and nothing the candidate can do to the file changes it. The
+/// `%PDF-` header in `pdfFileText` is what settles whether it is one.
 function isPdf(file) {
-  return /\.pdf$/i.test(file.name || "") && file.type === "application/pdf";
+  return /\.pdf$/i.test(file.name || "");
 }
 
 async function textFileText(file) {
@@ -61,6 +64,12 @@ async function pdfFileText(file, extractPdfText) {
     text = await extractPdfText(bytes);
   } catch (error) {
     if (error?.name === "PasswordException") throw new Error("The PDF is password-protected.");
+    if (error?.name === pdfReaderMissing) {
+      throw new Error("The PDF reader did not load, so PDFs cannot be read here right now. Use a .txt file instead.");
+    }
+    if (error?.name === pdfTooLong) {
+      throw new Error(`The PDF has ${error.pages} pages; it must have ${maxGroundingPdfPages} or fewer.`);
+    }
     throw new Error("The PDF could not be read.");
   }
   if (!/\p{L}/u.test(text)) {
@@ -84,14 +93,34 @@ const pdfjsBase = "/vendor/pdfjs/";
 /// Text only: no page is drawn, so nothing pdf.js needs for drawing is
 /// fetched or vendored. See web/vendor/pdfjs/README.md for what that leaves
 /// out and why it does not matter here.
+/// The names `readPdfText` tags its own refusals with, so `pdfFileText` can
+/// tell them from a file pdf.js could not parse. Exported for the tests'
+/// stand-in, which has to throw what the real one throws.
+export const pdfReaderMissing = "PdfReaderMissing";
+export const pdfTooLong = "PdfTooLong";
+
 async function readPdfText(bytes) {
-  const pdfjs = await import(`${pdfjsBase}pdf.min.mjs`);
+  // Its own failure, told apart from the file's: a deployment that never ran
+  // scripts/fetch-vendor.sh has no reader to load, and the PDF is not at fault.
+  let pdfjs;
+  try {
+    pdfjs = await import(`${pdfjsBase}pdf.min.mjs`);
+  } catch (cause) {
+    throw Object.assign(new Error("pdf.js did not load", { cause }), { name: pdfReaderMissing });
+  }
   pdfjs.GlobalWorkerOptions.workerSrc = `${pdfjsBase}pdf.worker.min.mjs`;
   const task = pdfjs.getDocument({ data: bytes, isEvalSupported: false, disableFontFace: true });
   try {
     const doc = await task.promise;
+
+    // Refused rather than cut short, like every other limit here: reading the
+    // first pages of a longer document and reporting success would leave the
+    // candidate with fewer snippets and no reason for it.
+    if (doc.numPages > maxGroundingPdfPages) {
+      throw Object.assign(new Error("too many pages"), { name: pdfTooLong, pages: doc.numPages });
+    }
     const pages = [];
-    for (let number = 1; number <= Math.min(doc.numPages, maxGroundingPdfPages); number += 1) {
+    for (let number = 1; number <= doc.numPages; number += 1) {
       const content = await (await doc.getPage(number)).getTextContent();
       pages.push(content.items.map((item) => (item.str ?? "") + (item.hasEOL ? "\n" : "")).join(""));
     }
@@ -99,7 +128,9 @@ async function readPdfText(bytes) {
   } finally {
     // Ends the worker along with the document. A candidate who picks a JD
     // and then a resume would otherwise hold two parsers for the session.
-    await task.destroy();
+    // Its own failure is swallowed, so it cannot replace the error that says
+    // what was wrong with the file.
+    await task.destroy().catch(() => {});
   }
 }
 
