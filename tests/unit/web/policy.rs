@@ -30,7 +30,7 @@ fn policy_for(url: &str) -> String {
                 url: url.to_string(),
                 api_key: "devkey".to_string(),
                 api_secret: "devsecret".to_string(),
-                google_api_key: String::new(),
+                google_api_keys: Vec::new(),
             }],
         },
         probe_provider_quota: false,

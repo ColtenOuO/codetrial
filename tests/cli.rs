@@ -854,11 +854,13 @@ fn binary_accepts_dash_prefixed_values_through_the_attached_form() {
     let dir = temp_path("dash-values");
     std::fs::create_dir_all(&dir).unwrap();
     let config = dir.join("-dashfile.env");
-    write_config(&config, &dir, "127.0.0.1:1");
+    let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = occupied.local_addr().unwrap().to_string();
+    write_config(&config, &dir, &address);
     let (code, _, stderr) = run_cli_args(&[
         "web",
         &format!("--config={}", config.to_str().unwrap()),
-        "--web-addr=127.0.0.1:1",
+        &format!("--web-addr={address}"),
     ]);
     let _ = std::fs::remove_dir_all(dir);
 
@@ -2146,7 +2148,9 @@ fn binary_web_serves_in_production_with_a_session_secret() {
 /// startup refusal read from the same values, for real.
 #[test]
 fn binary_web_reads_deployment_keys_from_the_config_file() {
-    let source = std::fs::read_to_string("src/main.rs").unwrap();
+    let source = std::fs::read_to_string("src/main.rs")
+        .unwrap()
+        .replace("\r\n", "\n");
 
     // Ends at the closing brace in column zero rather than at whatever item
     // happens to follow. Keying on the next `async fn` meant deleting the

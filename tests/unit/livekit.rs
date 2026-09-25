@@ -1696,3 +1696,231 @@ fn replacing_a_socket_drops_its_pending_close_request() {
     assert!(!activity.discarding_output);
     assert!(!activity.tool_response_outstanding);
 }
+
+/// The first open of an interview must ride out a 503 on the key it selected.
+/// It once stopped on the first transport failure or 5xx, ending the interview
+/// before the candidate heard anything. A backup does not change that: a 5xx
+/// says nothing about the key, and moving to the next one during an outage
+/// only spreads the traffic.
+#[tokio::test]
+// The handshake callback's error type is a full HTTP response.
+#[allow(clippy::result_large_err)]
+async fn first_cold_open_retries_a_503_on_the_selected_key() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::{Message, handshake::server};
+
+    for (setting, value, first) in [
+        ("GOOGLE_API_KEY", "cold-open-only", "cold-open-only"),
+        (
+            "GOOGLE_API_KEYS",
+            "cold-open-first,cold-open-backup",
+            "cold-open-first",
+        ),
+    ] {
+        let config = load_from_pairs([
+            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+            ("LIVEKIT_API_KEY", "devkey"),
+            ("LIVEKIT_API_SECRET", "devsecret"),
+            (setting, value),
+            ("GEMINI_LIVE_MODEL", "gemini-live"),
+        ])
+        .unwrap();
+        let keys = GeminiKeys::from_config(&config);
+        let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let refuse = seen.is_empty();
+                let accepted = tokio_tungstenite::accept_hdr_async(
+                    socket,
+                    |request: &server::Request, response| {
+                        seen.push(request.uri().query().unwrap_or_default().to_string());
+                        if refuse {
+                            let mut refusal = server::ErrorResponse::new(None);
+                            *refusal.status_mut() = axum::http::StatusCode::SERVICE_UNAVAILABLE;
+                            Err(refusal)
+                        } else {
+                            Ok(response)
+                        }
+                    },
+                )
+                .await;
+                if let Ok(mut socket) = accepted {
+                    socket.next().await.unwrap().unwrap();
+                    socket
+                        .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+                        .await
+                        .unwrap();
+                    let _ = socket.next().await;
+                    return seen;
+                }
+            }
+        });
+        let mut restarts = 0;
+        let session = retry_cold_open(&keys, &mut restarts, || {
+            crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None)
+        })
+        .await
+        .unwrap();
+        let _ = session.close().await;
+        let expected = format!("key={first}");
+        assert_eq!(
+            server.await.unwrap(),
+            [expected.clone(), expected],
+            "{value}"
+        );
+        assert_eq!(restarts, 1, "{value}");
+    }
+}
+
+/// The first open's retries run inside a wall-clock bound, not only the
+/// restart budget: the candidate is already looking at a listening interviewer,
+/// and a budget of connect and setup timeouts kept them there for minutes. The
+/// bound cuts a retry off mid-backoff rather than letting another attempt
+/// start.
+#[tokio::test]
+// The handshake callback's error type is a full HTTP response.
+#[allow(clippy::result_large_err)]
+async fn a_first_open_gives_up_at_its_time_limit() {
+    use tokio_tungstenite::tungstenite::handshake::server;
+
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "first-open-limit"),
+        ("GEMINI_LIVE_MODEL", "gemini-live"),
+    ])
+    .unwrap();
+    let keys = GeminiKeys::from_config(&config);
+    let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/", listener.local_addr().unwrap());
+    let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = std::sync::Arc::clone(&connections);
+    let server = tokio::spawn(async move {
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = tokio_tungstenite::accept_hdr_async(
+                socket,
+                |_: &server::Request, _: server::Response| {
+                    let mut refusal = server::ErrorResponse::new(None);
+                    *refusal.status_mut() = axum::http::StatusCode::SERVICE_UNAVAILABLE;
+                    Err(refusal)
+                },
+            )
+            .await;
+        }
+    });
+    let started = Instant::now();
+    let error = crate::gemini::first_open_within(
+        COLD_OPEN_BACKOFF / 4,
+        retry_cold_open(&keys, &mut 0, || {
+            crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None)
+        }),
+    )
+    .await
+    .err()
+    .unwrap();
+    server.abort();
+    assert!(error.to_string().contains("did not open within"), "{error}");
+    assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(started.elapsed() < COLD_OPEN_BACKOFF);
+}
+
+/// Two keys that both hit a 429 inside a minute must not end an interview one
+/// key would have ridden out: the exhausted rotation waits, under the budget,
+/// for its first key back. Keys that were all refused have nothing to wait for,
+/// and neither does a spent budget. The wait is a minute, so a short bound
+/// stands in for it: it cuts the wait off where a stop would have returned.
+#[tokio::test]
+// The handshake callback's error type is a full HTTP response.
+#[allow(clippy::result_large_err)]
+async fn an_exhausted_rotation_waits_only_for_a_key_out_on_quota() {
+    use tokio_tungstenite::tungstenite::handshake::server;
+
+    for (status, prefix, budget_left, waits) in [
+        (
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "all-quota",
+            true,
+            true,
+        ),
+        (
+            axum::http::StatusCode::FORBIDDEN,
+            "all-refused",
+            true,
+            false,
+        ),
+        (
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "quota-spent",
+            false,
+            false,
+        ),
+    ] {
+        let config = load_from_pairs([
+            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+            ("LIVEKIT_API_KEY", "devkey"),
+            ("LIVEKIT_API_SECRET", "devsecret"),
+            ("GOOGLE_API_KEYS", &format!("{prefix}-a,{prefix}-b")),
+            ("GEMINI_LIVE_MODEL", "gemini-live"),
+        ])
+        .unwrap();
+        let keys = GeminiKeys::from_config(&config);
+        let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let _ = tokio_tungstenite::accept_hdr_async(
+                    socket,
+                    move |_: &server::Request, _: server::Response| {
+                        let mut refusal = server::ErrorResponse::new(None);
+                        *refusal.status_mut() = status;
+                        Err(refusal)
+                    },
+                )
+                .await;
+            }
+        });
+        // Both keys go out the way an interview's would, over the socket.
+        for _ in 0..2 {
+            assert!(
+                crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None)
+                    .await
+                    .is_err()
+            );
+        }
+        server.abort();
+
+        let mut restarts = if budget_left { 0 } else { GEMINI_RESTART_LIMIT };
+        let mut attempts = 0;
+        let error = crate::gemini::first_open_within(
+            COLD_OPEN_BACKOFF / 4,
+            retry_cold_open(&keys, &mut restarts, || {
+                attempts += 1;
+                let error = keys.select().unwrap_err();
+                async move { Err(error.into()) }
+            }),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(attempts, 1, "{prefix}");
+        if waits {
+            assert!(error.to_string().contains("did not open within"), "{error}");
+            assert_eq!(restarts, 1, "{prefix}");
+        } else {
+            assert!(
+                error.to_string().contains("credentials exhausted"),
+                "{error}"
+            );
+        }
+    }
+}

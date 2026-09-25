@@ -407,7 +407,7 @@ async fn probe_credentials(fields: &SetupFields, production: bool) -> Option<Res
     let room_name = format!("{}-smoke", config.room_prefix);
     let boot = bootstrap(&config, &room_name, None, config.default_duration_min);
     let url = std::env::var("CODETRIAL_GEMINI_LIVE_URL")
-        .unwrap_or_else(|_| gemini_live_websocket_url(&config.google_api_key));
+        .unwrap_or_else(|_| gemini_live_websocket_url(&fields.google_api_key));
     match open_live_session_at(&url, &boot, None).await {
         Ok(session) => {
             let _ = session.close().await;

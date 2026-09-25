@@ -52,7 +52,7 @@ async fn the_configured_cap_is_the_one_enforced() {
         url: "wss://primary.example".to_string(),
         api_key: "primary-key".to_string(),
         api_secret: "primary-secret".to_string(),
-        google_api_key: String::new(),
+        google_api_keys: Vec::new(),
     };
 
     assert!(
@@ -124,11 +124,12 @@ async fn a_concurrent_burst_never_overbooks_and_released_capacity_returns() {
     assert_eq!(live.lock().unwrap().len(), 3);
 }
 
-/// A provider's own Google key wins, and an empty one leaves the base key
-/// alone rather than blanking it.
+/// A provider's own Google key wins, over the global list as well as the
+/// global key, and an empty one leaves the base credentials alone rather than
+/// blanking them.
 #[test]
 fn provider_credentials_replace_the_base_without_blanking_the_key() {
-    let base = crate::config::load_from_pairs([
+    let mut base = crate::config::load_from_pairs([
         ("LIVEKIT_URL", "wss://primary.example"),
         ("LIVEKIT_API_KEY", "primary-key"),
         ("LIVEKIT_API_SECRET", "primary-secret"),
@@ -140,16 +141,35 @@ fn provider_credentials_replace_the_base_without_blanking_the_key() {
         url: "wss://second.example".to_string(),
         api_key: "second-key".to_string(),
         api_secret: "second-secret".to_string(),
-        google_api_key: String::new(),
+        google_api_keys: Vec::new(),
     };
 
     let inherited = agent_config_for(&base, &provider);
     assert_eq!(inherited.livekit_url, "wss://second.example");
-    assert_eq!(inherited.google_api_key, "primary-google");
+    assert_eq!(inherited.google_api_keys, ["primary-google"]);
 
-    provider.google_api_key = "second-google".to_string();
+    base.google_api_keys = vec!["global-first".into(), "global-second".into()];
+    provider.google_api_keys = vec!["second-google".into()];
+    let own_key = agent_config_for(&base, &provider);
+    assert_eq!(own_key.google_api_keys, ["second-google"]);
     assert_eq!(
-        agent_config_for(&base, &provider).google_api_key,
+        crate::gemini::GeminiKeys::from_config(&own_key)
+            .select()
+            .unwrap(),
         "second-google"
     );
+    provider.google_api_keys.clear();
+    let inherited = agent_config_for(&base, &provider);
+    assert_eq!(
+        crate::gemini::GeminiKeys::from_config(&inherited)
+            .select()
+            .unwrap(),
+        "global-first"
+    );
+    provider.google_api_keys = vec!["provider-first".into(), "provider-second".into()];
+    let selected = agent_config_for(&base, &provider);
+    assert_eq!(selected.google_api_keys, provider.google_api_keys);
+    assert_eq!(selected.livekit_url, inherited.livekit_url);
+    assert_eq!(selected.livekit_api_key, inherited.livekit_api_key);
+    assert_eq!(selected.livekit_api_secret, inherited.livekit_api_secret);
 }

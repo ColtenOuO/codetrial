@@ -2658,7 +2658,8 @@ mod failure {
                 )
                 .unwrap();
 
-            let listed = std::process::Command::new("./scripts/recording-cleanup.sh")
+            let listed = std::process::Command::new("sh")
+                .arg("./scripts/recording-cleanup.sh")
                 .args([
                     "--db",
                     scratch.path().to_str().unwrap(),
@@ -2695,7 +2696,8 @@ mod failure {
             // `--expire` is the operator's, and it says so on the row: the
             // tombstone records a person asking rather than a deadline
             // arriving.
-            let marked = std::process::Command::new("./scripts/recording-cleanup.sh")
+            let marked = std::process::Command::new("sh")
+                .arg("./scripts/recording-cleanup.sh")
                 .args([
                     "--db",
                     scratch.path().to_str().unwrap(),
@@ -2737,7 +2739,8 @@ mod failure {
             );
 
             // An id nobody has is a failure rather than a quiet success.
-            let missing = std::process::Command::new("./scripts/recording-cleanup.sh")
+            let missing = std::process::Command::new("sh")
+                .arg("./scripts/recording-cleanup.sh")
                 .args([
                     "--db",
                     scratch.path().to_str().unwrap(),

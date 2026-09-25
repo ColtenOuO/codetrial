@@ -298,7 +298,7 @@ fn provider(id: &str) -> codetrial::config::Provider {
         url: format!("wss://{id}.example"),
         api_key: format!("{id}-key"),
         api_secret: format!("{id}-secret"),
-        google_api_key: format!("{id}-google"),
+        google_api_keys: vec![format!("{id}-google")],
     }
 }
 
@@ -318,7 +318,7 @@ fn a_room_name_routes_the_agent_to_the_provider_it_names() {
         .expect("a configured provider should resolve");
     assert_eq!(config.livekit_url, "wss://eu.example");
     assert_eq!(config.livekit_api_secret, "eu-secret");
-    assert_eq!(config.google_api_key, "eu-google");
+    assert_eq!(config.google_api_keys, ["eu-google"]);
 
     // No segment: what a single-provider deployment mints, and what a
     // hand-written INTERVIEW_ROOM_NAME usually looks like.

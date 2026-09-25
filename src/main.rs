@@ -362,7 +362,7 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     let agent_config = codetrial::config::load_from_pairs(values).ok();
     if agent_config.is_none() {
         eprintln!(
-            "no GOOGLE_API_KEY: serving the web side only. Interviews will wait forever unless \
+            "no GOOGLE_API_KEY or GOOGLE_API_KEYS: serving the web side only. Interviews will wait forever unless \
              an agent joins each room from elsewhere."
         );
     }
@@ -423,7 +423,7 @@ fn web_provider_pool(
         url,
         api_key,
         api_secret,
-        google_api_key: value_or(values, "GOOGLE_API_KEY", ""),
+        google_api_keys: codetrial::config::google_api_keys(values)?,
     });
     extend_pool(
         &mut pool,
@@ -631,7 +631,7 @@ fn run_livekit(config: AgentConfig, room_name: &str) -> Result<(), String> {
             codetrial::web::current_epoch_seconds(),
         ))
         .map_err(|error| {
-            codetrial::gemini::redact_api_key(&error.to_string(), &config.google_api_key)
+            codetrial::gemini::GeminiKeys::from_config(&config).redact(&error.to_string())
         })
 }
 
@@ -646,12 +646,13 @@ fn run_gemini_check(config: AgentConfig, room_name: &str) -> Result<(), String> 
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
     let result = runtime.block_on(async {
         let boot = codetrial::runtime::bootstrap(&config, room_name, None, duration_min);
-        let session = codetrial::gemini::open_live_session(&config.google_api_key, &boot).await?;
+        let keys = codetrial::gemini::GeminiKeys::from_config(&config);
+        let session = codetrial::gemini::check_live_session(&keys, &boot).await?;
         session.close().await?;
         Ok::<_, Box<dyn std::error::Error + Send + Sync>>(boot)
     });
     let boot = result.map_err(|error| {
-        codetrial::gemini::redact_api_key(&error.to_string(), &config.google_api_key)
+        codetrial::gemini::GeminiKeys::from_config(&config).redact(&error.to_string())
     })?;
     println!(
         "Gemini setupComplete: model={} voice={} problem={} duration={}min",
@@ -674,7 +675,7 @@ fn run_gemini_check(config: AgentConfig, room_name: &str) -> Result<(), String> 
 /// wrong: an agent that cannot see the config directory has a pool of one and
 /// an
 /// unresolvable id, which is exactly the case that has to fail loudly.
-fn select_provider(mut config: AgentConfig, room_name: &str) -> Result<AgentConfig, String> {
+fn select_provider(config: AgentConfig, room_name: &str) -> Result<AgentConfig, String> {
     if let Some(id) = codetrial::config::provider_id_from_room(room_name, &config.room_prefix)
         && config.pool.get(id).is_none()
     {
@@ -685,13 +686,7 @@ fn select_provider(mut config: AgentConfig, room_name: &str) -> Result<AgentConf
     let Some(provider) = config.pool.for_room(room_name, &config.room_prefix) else {
         return Ok(config);
     };
-    config.livekit_url = provider.url.clone();
-    config.livekit_api_key = provider.api_key.clone();
-    config.livekit_api_secret = provider.api_secret.clone();
-    if !provider.google_api_key.is_empty() {
-        config.google_api_key = provider.google_api_key.clone();
-    }
-    Ok(config)
+    Ok(codetrial::dispatch::agent_config_for(&config, provider))
 }
 
 fn load_agent_config(options: &CliOptions) -> Result<AgentConfig, String> {
@@ -726,9 +721,7 @@ fn environment_and_flags(options: &CliOptions) -> BTreeMap<String, String> {
 fn load_values(options: &CliOptions) -> Result<BTreeMap<String, String>, String> {
     let mut values = std::env::vars().collect::<BTreeMap<_, _>>();
     let path = primary_config_path(options)?;
-    for (key, value) in codetrial::config::read_config_file(&path)? {
-        values.insert(key, value);
-    }
+    codetrial::config::apply_config_file(&mut values, codetrial::config::read_config_file(&path)?);
     apply_options(&mut values, options);
     Ok(values)
 }

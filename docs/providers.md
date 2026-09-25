@@ -29,6 +29,52 @@ file that does not parse, or that names only part of a provider, is skipped with
 a warning on stderr rather than failing the load: an optional extra project must
 not be able to stop the primary one from serving.
 
+## Gemini credential failover
+
+Set `GOOGLE_API_KEYS=first-key,second-key` to try Gemini credentials in order.
+Whitespace around entries is ignored; empty entries and duplicate keys are
+rejected. A list takes precedence over `GOOGLE_API_KEY` at the same level. A
+provider's own credentials replace the global ones entirely: its
+`GOOGLE_API_KEYS` replaces the global list, and a provider that sets only
+`GOOGLE_API_KEY` uses that key and not the global list, so its rooms never bill
+another project. Single-key configurations still work. A blank value of
+`GOOGLE_API_KEYS` counts as unset.
+
+Quota exhaustion and rejected or disabled keys select the next available key.
+A key counts as rejected on a 401, on a 403 that is not about quota (including
+one with no body, which is how a WebSocket handshake refusal arrives), and on a
+400 whose reason names the key, such as `API_KEY_INVALID` or an IP, referrer or
+app restriction. Quota failures put a key on a 60-second cooldown shared across
+interviews in the same process, separately for Live and report requests.
+Rejected keys are disabled for both for 60 seconds, except that a 403 with no
+reason disables the key only for the kind of request that saw it. When every
+key is out on quota, an interview waits for the first one back within its
+restart budget instead of ending. A working key
+stays selected for that interview; report failover leaves the Live key alone,
+and moving to a backup does not wait out the failed key's backoff. Other
+failures follow the existing retry rules without switching keys. Keys from the
+same Google Cloud project share quota, so adding keys does not add quota to
+that project.
+
+A sole key is never taken out of rotation, because there is nothing to move to:
+quota failures keep the retry budgets they always had, and a rejection is
+reported as a rejection, rather than as an empty rotation, without disabling the
+key for every later room.
+
+An interview's first Live open retries within 30 seconds, the time one attempt
+could always take, so an unreachable Gemini ends the room as quickly as before.
+`check-gemini` selects keys the same way: it moves past rejected keys, trying no
+more than an interview's first open would, and reports any other failure at
+once.
+
+Interim reviews never retry in place, and they share invalid-key failures and
+quota cooldowns with the final report.
+
+Switching keys keeps the LiveKit room and project, but starts a cold Gemini
+session from the retained transcript, editor and interview state. Resumption
+handles stay with their original key; seamless resumption across keys or
+projects has not been verified.
+
 ## How a room finds its project
 
 The id travels inside the room name, `interview-<id>-xxxxxxxx`. That is the

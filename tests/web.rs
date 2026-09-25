@@ -100,7 +100,7 @@ fn primary_pool(url: &str, api_key: &str, api_secret: &str) -> codetrial::config
             url: url.to_string(),
             api_key: api_key.to_string(),
             api_secret: api_secret.to_string(),
-            google_api_key: String::new(),
+            google_api_keys: Vec::new(),
         }],
     }
 }
@@ -111,7 +111,7 @@ fn provider(id: &str, host: &str) -> codetrial::config::Provider {
         url: format!("wss://{host}.livekit.cloud"),
         api_key: format!("{id}-key"),
         api_secret: format!("{id}-secret"),
-        google_api_key: format!("{id}-google"),
+        google_api_keys: vec![format!("{id}-google")],
     }
 }
 
@@ -179,12 +179,30 @@ fn signed_in_web_config(label: &str) -> (WebServerConfig, String, std::path::Pat
 /// collected 2657 of them. `src/accounts.rs` has always cleaned all three for
 /// its own scratch databases; this side never learned to.
 ///
-/// The main file keeps its `unwrap`, so a test that was asserting the database
-/// existed still does. The sidecars do not: WAL leaves them behind only if the
+/// The main file must exist and be removed, so a test that was asserting the
+/// database existed still does. The sidecars do not: WAL leaves them behind
+/// only if the
 /// database was actually opened, and a test that never opened it is not broken.
-fn remove_database(path: impl AsRef<std::path::Path>) {
+async fn remove_database(path: impl AsRef<std::path::Path>) {
     let path = path.as_ref();
-    fs::remove_file(path).unwrap();
+
+    // Dropping the router cancels recording workers. Their cancellation must
+    // run before Windows releases the last database handle; keep yielding to
+    // the runtime rather than sleeping on its thread or ignoring deletion.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        match fs::remove_file(path) {
+            Ok(()) => break,
+            Err(error)
+                if cfg!(windows)
+                    && error.raw_os_error() == Some(32)
+                    && tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => panic!("remove test database {}: {error}", path.display()),
+        }
+    }
     for suffix in ["-wal", "-shm"] {
         let _ = fs::remove_file(format!("{}{suffix}", path.display()));
     }
@@ -196,14 +214,7 @@ fn account_db_path(label: &str) -> std::path::PathBuf {
 
 /// A server with accounts enabled and nobody signed in yet, which is where
 /// every login test starts.
-async fn account_server(
-    label: &str,
-) -> (
-    String,
-    tokio::task::JoinHandle<Result<(), std::io::Error>>,
-    std::path::PathBuf,
-    reqwest::Client,
-) {
+async fn account_server(label: &str) -> (String, TestServer, std::path::PathBuf, reqwest::Client) {
     let db_path = account_db_path(label);
     initialize_account_database(&db_path).unwrap();
     let mut config = web_config();
@@ -255,15 +266,47 @@ fn signed_cookie(value: &str, secret: &str) -> String {
     )
 }
 
-async fn spawn_web_server(
-    config: WebServerConfig,
-) -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
+/// Stop accepting requests and drain connections before removing a database.
+/// Aborting only the listener leaves Axum's connection tasks holding SQLite
+/// files open, which Windows refuses to unlink.
+struct TestServer {
+    shutdown: tokio::sync::oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<Result<(), std::io::Error>>,
+}
+
+impl TestServer {
+    async fn shutdown(self) {
+        let _ = self.shutdown.send(());
+        tokio::time::timeout(Duration::from_secs(10), self.task)
+            .await
+            .expect("test server should drain its connections")
+            .expect("test server should not panic")
+            .expect("test server should shut down cleanly");
+    }
+}
+
+fn spawn_test_server(
+    listener: tokio::net::TcpListener,
+    router: axum::extract::connect_info::IntoMakeServiceWithConnectInfo<
+        axum::Router,
+        std::net::SocketAddr,
+    >,
+) -> TestServer {
+    let (shutdown, stopped) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await
+    });
+    TestServer { shutdown, task }
+}
+
+async fn spawn_web_server(config: WebServerConfig) -> (String, TestServer) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let server =
-        tokio::spawn(
-            async move { axum::serve(listener, codetrial::web::web_service(config)).await },
-        );
+    let server = spawn_test_server(listener, codetrial::web::web_service(config));
     (format!("http://{addr}"), server)
 }
 
@@ -308,16 +351,13 @@ impl RecordingDispatcher {
 async fn spawn_web_server_with_dispatcher(
     config: WebServerConfig,
     dispatcher: std::sync::Arc<RecordingDispatcher>,
-) -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
+) -> (String, TestServer) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            codetrial::web::web_service_with_dispatcher(config, Some(dispatcher)),
-        )
-        .await
-    });
+    let server = spawn_test_server(
+        listener,
+        codetrial::web::web_service_with_dispatcher(config, Some(dispatcher)),
+    );
     (format!("http://{addr}"), server)
 }
 
@@ -397,9 +437,7 @@ fn mock_github_authorized(headers: &axum::http::HeaderMap, issued: &MockGitHubIs
 /// GitHub sends while rate limiting. Everything else has to stay identical or
 /// the rate-limit test would be comparing two servers that differ in more than
 /// the failure it is about.
-async fn spawn_github_stub(
-    emails: (axum::http::StatusCode, Value),
-) -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
+async fn spawn_github_stub(emails: (axum::http::StatusCode, Value)) -> (String, TestServer) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let emails = std::sync::Arc::new(emails);
@@ -474,11 +512,14 @@ async fn spawn_github_stub(
                 }
             }),
         );
-    let server = tokio::spawn(async move { axum::serve(listener, router).await });
+    let server = spawn_test_server(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    );
     (format!("http://{addr}"), server)
 }
 
-async fn spawn_mock_github() -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
+async fn spawn_mock_github() -> (String, TestServer) {
     // What `read:user` alone cannot answer. The unverified and secondary
     // entries are here because selecting the wrong one is the failure this
     // endpoint exists to make possible.
@@ -661,8 +702,7 @@ fn recording_config() -> codetrial::config::RecordingConfig {
 /// GitHub with a working `/user` and a rate-limited `/user/emails`. The 403
 /// body is JSON and parses, which is what makes this failure look like an
 /// answer rather than an error to anything that does not check the status.
-async fn spawn_rate_limited_github() -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>)
-{
+async fn spawn_rate_limited_github() -> (String, TestServer) {
     spawn_github_stub((
         axum::http::StatusCode::FORBIDDEN,
         json!({"message":"API rate limit exceeded"}),
@@ -870,7 +910,7 @@ async fn recorded_server(
     label: &str,
 ) -> (
     String,
-    tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    TestServer,
     std::path::PathBuf,
     reqwest::Client,
     String,
@@ -898,7 +938,7 @@ async fn recorded_server_with_provider(
     provider: std::sync::Arc<FakeRecordingProvider>,
 ) -> (
     String,
-    tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    TestServer,
     std::path::PathBuf,
     reqwest::Client,
     String,
@@ -922,13 +962,10 @@ async fn recorded_server_with_provider(
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            codetrial::web::web_service_with_recorder(config, None, recorder),
-        )
-        .await
-    });
+    let server = spawn_test_server(
+        listener,
+        codetrial::web::web_service_with_recorder(config, None, recorder),
+    );
     (
         format!("http://{addr}"),
         server,
@@ -1071,7 +1108,7 @@ async fn spawn_livekit_quota_stub(
     delay: Duration,
     api_key: &str,
     api_secret: &str,
-) -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
+) -> (String, TestServer) {
     let (url, _hits, server) = spawn_counting_quota_stub(status, delay, api_key, api_secret).await;
     (url, server)
 }
@@ -1108,7 +1145,7 @@ async fn spawn_counting_quota_stub(
 ) -> (
     String,
     std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    TestServer,
 ) {
     let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counter = hits.clone();
@@ -1142,7 +1179,10 @@ async fn spawn_counting_quota_stub(
             }
         }),
     );
-    let server = tokio::spawn(async move { axum::serve(listener, router).await });
+    let server = spawn_test_server(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    );
     (format!("ws://127.0.0.1:{}", addr.port()), hits, server)
 }
 

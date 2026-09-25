@@ -101,6 +101,8 @@ const PROVIDER_FILE_PREFIX: &str = "codetrial.env.";
 /// together: a parallel list means two independent indexes into two vectors
 /// that can differ in length, which is a whole class of routing bug that stops
 /// existing once there is one record to look up.
+/// Its Gemini keys are one ordered list, whichever name set them; the list
+/// does not select another LiveKit project.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Provider {
     /// `primary`, or the suffix of a `config/codetrial.env.<id>` file. This is
@@ -111,7 +113,7 @@ pub struct Provider {
     pub url: String,
     pub api_key: String,
     pub api_secret: String,
-    pub google_api_key: String,
+    pub google_api_keys: Vec<String>,
 }
 
 /// The policy for credentials is "not printable". `AgentConfig` gets that by
@@ -128,7 +130,7 @@ impl fmt::Debug for Provider {
             .field("url", &self.url)
             .field("api_key", &"<redacted>")
             .field("api_secret", &"<redacted>")
-            .field("google_api_key", &"<redacted>")
+            .field("google_api_keys", &"<redacted>")
             .finish()
     }
 }
@@ -436,7 +438,8 @@ fn provider_from_file(id: &str, path: &Path, production: bool) -> Result<Provide
         url: url.to_string(),
         api_key: api_key.to_string(),
         api_secret: api_secret.to_string(),
-        google_api_key: value("GOOGLE_API_KEY").unwrap_or_default().to_string(),
+        google_api_keys: google_api_keys(&values)
+            .map_err(|message| format!("{}: skipped, {message}", path.display()))?,
     })
 }
 
@@ -466,6 +469,20 @@ pub fn read_config_file(path: &Path) -> Result<Vec<(String, String)>, String> {
     Ok(values)
 }
 
+/// Lays the config file over the environment. The two Gemini credential names
+/// are one setting: a file that sets either replaces both, so an inherited
+/// `GOOGLE_API_KEYS` cannot outrank the file's own `GOOGLE_API_KEY`. A blank
+/// entry is no credential, so it leaves the other name alone.
+pub fn apply_config_file(values: &mut BTreeMap<String, String>, file: Vec<(String, String)>) {
+    if file.iter().any(|(key, value)| {
+        (key == "GOOGLE_API_KEY" || key == "GOOGLE_API_KEYS") && !value.trim().is_empty()
+    }) {
+        values.remove("GOOGLE_API_KEY");
+        values.remove("GOOGLE_API_KEYS");
+    }
+    values.extend(file);
+}
+
 /// No `Debug`, deliberately: two of these fields are credentials, and nothing
 /// needs to print the struct. See the `Debug` impl on [`Provider`] for why that
 /// type is handled the other way.
@@ -474,7 +491,7 @@ pub struct AgentConfig {
     pub livekit_url: String,
     pub livekit_api_key: String,
     pub livekit_api_secret: String,
-    pub google_api_key: String,
+    pub google_api_keys: Vec<String>,
     pub gemini_live_model: String,
     pub gemini_report_model: String,
     pub gemini_voice: String,
@@ -597,6 +614,7 @@ pub fn load_from_pairs(
     let missing_keys = REQUIRED_KEYS
         .iter()
         .copied()
+        .filter(|key| *key != "GOOGLE_API_KEY" || present(&values, "GOOGLE_API_KEYS").is_none())
         .filter(|key| values.get(*key).is_none_or(|value| value.trim().is_empty()))
         .collect::<Vec<_>>();
 
@@ -604,6 +622,10 @@ pub fn load_from_pairs(
     let production = is_production(&values);
 
     let mut invalid_entries = Vec::new();
+    let google_api_keys = google_api_keys(&values).unwrap_or_else(|message| {
+        invalid_entries.push(message);
+        Vec::new()
+    });
     if !livekit_url.is_empty()
         && let Err(message) = validate_livekit_url(&livekit_url, production)
     {
@@ -623,7 +645,6 @@ pub fn load_from_pairs(
     // panic at a call site that cannot see why it was meant to be safe.
     let livekit_api_key = optional(&values, "LIVEKIT_API_KEY", "");
     let livekit_api_secret = optional(&values, "LIVEKIT_API_SECRET", "");
-    let google_api_key = optional(&values, "GOOGLE_API_KEY", "");
 
     // Only the primary. Discovering the rest reads the filesystem, which is the
     // caller's business: keeping it out of here is what lets a test call this
@@ -634,7 +655,7 @@ pub fn load_from_pairs(
             url: livekit_url.clone(),
             api_key: livekit_api_key.clone(),
             api_secret: livekit_api_secret.clone(),
-            google_api_key: google_api_key.clone(),
+            google_api_keys: google_api_keys.clone(),
         }],
     };
 
@@ -642,7 +663,7 @@ pub fn load_from_pairs(
         livekit_url,
         livekit_api_key,
         livekit_api_secret,
-        google_api_key,
+        google_api_keys,
         gemini_live_model: optional(&values, "GEMINI_LIVE_MODEL", DEFAULT_GEMINI_LIVE_MODEL),
         gemini_report_model: report_model_or_default(&values),
         gemini_voice: optional(&values, "GEMINI_VOICE", DEFAULT_GEMINI_VOICE),
@@ -664,6 +685,29 @@ pub fn load_from_pairs(
         .min(MAX_INTERIM_REVIEWS as u32) as usize,
         pool,
     })
+}
+
+/// The Gemini keys in the order to try them: the comma-separated
+/// `GOOGLE_API_KEYS`, or else `GOOGLE_API_KEY` alone. A blank value is absence.
+/// Resolved here so nothing downstream chooses between the two names.
+pub fn google_api_keys(values: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
+    let Some(value) = present(values, "GOOGLE_API_KEYS") else {
+        return Ok(present(values, "GOOGLE_API_KEY")
+            .map(str::to_string)
+            .into_iter()
+            .collect());
+    };
+    let mut keys = Vec::new();
+    for key in value.split(',').map(str::trim) {
+        if key.is_empty() || keys.iter().any(|seen| seen == key) {
+            return Err("GOOGLE_API_KEYS must contain non-empty, distinct keys".to_string());
+        }
+        keys.push(key.to_string());
+    }
+    if present(values, "GOOGLE_API_KEY").is_some() {
+        eprintln!("GOOGLE_API_KEYS takes precedence over GOOGLE_API_KEY");
+    }
+    Ok(keys)
 }
 
 /// One reading of "is this a production deployment", because it is what refuses

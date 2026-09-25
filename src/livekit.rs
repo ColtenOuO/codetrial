@@ -33,6 +33,7 @@
 
 use std::collections::HashMap;
 use std::ops::ControlFlow;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ::livekit::DisconnectReason;
@@ -79,8 +80,8 @@ const CANDIDATE_JOIN_LIMIT: Duration = Duration::from_secs(300);
 const CANDIDATE_ABSENCE_LIMIT: Duration = Duration::from_secs(90);
 
 use crate::gemini::{
-    GeminiEvent, GeminiFunctionCall, GeminiLiveSession, generate_interim_review, open_live_session,
-    redact_api_key, resume_live_session,
+    GeminiEvent, GeminiFunctionCall, GeminiKeys, GeminiLiveSession,
+    generate_interim_review_with_keys, live_session_with_keys,
 };
 use crate::runtime::{
     AGENT_NAME, RuntimeBootstrap, TOOL_END_INTERVIEW, TOOL_LOG_HINT, TOOL_READ_EDITOR,
@@ -109,7 +110,7 @@ const GEMINI_OUTPUT_AUDIO_SAMPLE_RATE: u32 = 24_000;
 /// connection cap. In a row, because `take_restart_attempt` clears the count
 /// for any socket that lived past `HEALTHY_GEMINI_SOCKET`: this bounds a
 /// failing endpoint, not the length of an interview.
-const GEMINI_RESTART_LIMIT: usize = 8;
+pub(crate) const GEMINI_RESTART_LIMIT: usize = 8;
 
 /// Past this, a closed socket was a working one, whatever closed it. Gemini
 /// caps a connection at around ten minutes and a healthy interview crosses that
@@ -308,24 +309,56 @@ impl DeferredRestart {
 
 /// Opens a session that remembers nothing, retrying while the budget allows.
 ///
-/// `None` is the budget running out, which is the caller's cue to end the
+/// `Err` means credentials are unavailable or retries stopped, ending the
 /// interview. Split from `replace_gemini_session` because a loop with its own
 /// exit inside an arm of a match inside an arm of a match put the give-up path
 /// four levels deep in a function that is otherwise a sequence of steps.
 async fn open_cold_session(
     interview: InterviewContext<'_>,
     restarts: &mut usize,
-) -> Option<GeminiLiveSession> {
+) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>> {
+    retry_cold_open(interview.keys, restarts, || {
+        live_session_with_keys(interview.keys, interview.boot, None)
+    })
+    .await
+}
+
+/// The loop of `open_cold_session`, with the opener passed in so tests can
+/// point it at a local socket.
+async fn retry_cold_open<F, Fut>(
+    keys: &GeminiKeys,
+    restarts: &mut usize,
+    mut open: F,
+) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>>>,
+{
     loop {
-        match open_live_session(&interview.config.google_api_key, interview.boot).await {
-            Ok(session) => return Some(session),
-            Err(error) if take_restart_attempt(restarts, Duration::ZERO) => {
+        match open().await {
+            Ok(session) => return Ok(session),
+
+            // Every key is out on quota. A sole key would ride out the same
+            // rate limit under this budget, so a rotation waits too.
+            Err(error)
+                if crate::gemini::exhausted_until(error.as_ref()).is_some()
+                    && take_restart_attempt(restarts, Duration::ZERO) =>
+            {
+                let until = crate::gemini::exhausted_until(error.as_ref())
+                    .unwrap_or_else(std::time::Instant::now);
+                eprintln!("Gemini keys are all cooling down ({error}); waiting for the first back");
+                tokio::time::sleep_until(until.into()).await;
+            }
+            Err(error)
+                if crate::gemini::retry_live_open(error.as_ref(), keys.has_backups())
+                    && take_restart_attempt(restarts, Duration::ZERO) =>
+            {
                 eprintln!("Gemini could not be reached ({error}); retrying cold session");
                 tokio::time::sleep(COLD_OPEN_BACKOFF).await;
             }
             Err(error) => {
-                eprintln!("Gemini could not be reached ({error}); the budget is spent");
-                return None;
+                eprintln!("Gemini could not be reached ({error}); stopping cold session attempts");
+                return Err(error);
             }
         }
     }
@@ -353,6 +386,7 @@ async fn replace_gemini_session(
     interview: InterviewContext<'_>,
     restarts: &mut usize,
 ) -> Result<ControlFlow<()>, Box<dyn std::error::Error + Send + Sync>> {
+    let handle = context.gemini.recovery_handle(interview.keys);
     if !take_restart_attempt(restarts, context.gemini.age()) {
         eprintln!(
             "Gemini closed {restarts} sockets in a row without one of them lasting; ending interview room={}",
@@ -380,9 +414,9 @@ async fn replace_gemini_session(
     // session -- no handle, and a handle that was refused -- leave a `None` for
     // the cold start below to answer, which is why neither is a branch of its
     // own here.
-    let resumed_session = match context.gemini.resumption_handle() {
-        Some(handle) => {
-            resume_live_session(&interview.config.google_api_key, interview.boot, &handle)
+    let resumed_session = match handle {
+        Some((key, handle)) => {
+            live_session_with_keys(interview.keys, interview.boot, Some((&key, &handle)))
                 .await
                 .inspect_err(|error| {
                     eprintln!(
@@ -397,7 +431,7 @@ async fn replace_gemini_session(
     let resumed = resumed_session.is_some();
     let session = match resumed_session {
         Some(session) => Some(session),
-        None => open_cold_session(interview, restarts).await,
+        None => open_cold_session(interview, restarts).await.ok(),
     };
     let Some(session) = session else {
         eprintln!(
@@ -493,10 +527,10 @@ fn spawn_interim_review(
     interview: InterviewContext<'_>,
 ) -> tokio::task::JoinHandle<String> {
     let prompt = take_interim_review_window(state, interview.boot);
-    let api_key = interview.config.google_api_key.clone();
+    let keys = Arc::clone(interview.keys);
     let model = interview.boot.report_model.to_string();
     tokio::spawn(async move {
-        match generate_interim_review(&api_key, &model, &prompt).await {
+        match generate_interim_review_with_keys(&keys, &model, &prompt).await {
             Ok(text) => text,
 
             // Logged and answered with nothing. This is an optimization on a
@@ -506,7 +540,7 @@ fn spawn_interim_review(
             Err(error) => {
                 eprintln!(
                     "interim review skipped: {}",
-                    redact_api_key(&error.to_string(), &api_key)
+                    keys.redact(&error.to_string())
                 );
                 String::new()
             }
@@ -617,6 +651,7 @@ struct OpenSession<'a> {
     media: CandidateMedia,
     turn: TurnState,
     started_at: Instant,
+    restarts: usize,
 }
 
 /// Joins, waits for a candidate, brings up audio and Gemini, and greets.
@@ -630,6 +665,7 @@ struct OpenSession<'a> {
 /// candidate never arrived, and there is nothing to run or report.
 async fn open_session<'a>(
     config: &'a AgentConfig,
+    keys: &Arc<GeminiKeys>,
     room_name: &'a str,
     now_seconds: u64,
 ) -> Result<Option<OpenSession<'a>>, Box<dyn std::error::Error + Send + Sync>> {
@@ -663,12 +699,25 @@ async fn open_session<'a>(
     // "Neither needs the other's return value" was the wrong test. The
     // dependency is on room state, not on data.
     let setup_began = Instant::now();
+    let mut restarts = 0;
     let (output_audio, mut gemini) = tokio::try_join!(
         async {
             isolate_local_agent(config, room_name, &agent_identity, now_seconds).await?;
             publish_output_audio(&room, GEMINI_OUTPUT_AUDIO_SAMPLE_RATE).await
         },
-        open_live_session(&config.google_api_key, &boot),
+        async {
+            let interview = InterviewContext {
+                config,
+                keys,
+                boot: &boot,
+                started_at: setup_began,
+            };
+            crate::gemini::first_open_within(
+                crate::gemini::FIRST_OPEN_LIMIT,
+                open_cold_session(interview, &mut restarts),
+            )
+            .await
+        },
     )?;
     eprintln!(
         "timing: room and Gemini session ready {:.2}s after the candidate joined",
@@ -721,6 +770,7 @@ async fn open_session<'a>(
         media,
         turn,
         started_at,
+        restarts,
     }))
 }
 
@@ -979,6 +1029,7 @@ pub async fn run_room(
     room_name: &str,
     now_seconds: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let keys = Arc::new(GeminiKeys::from_config(config));
     let Some(OpenSession {
         room,
         mut events,
@@ -990,13 +1041,15 @@ pub async fn run_room(
         mut media,
         mut turn,
         started_at,
-    }) = open_session(config, room_name, now_seconds).await?
+        restarts,
+    }) = open_session(config, &keys, room_name, now_seconds).await?
     else {
         return Ok(());
     };
 
     let interview = InterviewContext {
         config,
+        keys: &keys,
         boot: &boot,
         started_at,
     };
@@ -1007,7 +1060,7 @@ pub async fn run_room(
         now_seconds,
     };
     let mut loops = RoomLoop {
-        restarts: 0,
+        restarts,
         deferred_restart: DeferredRestart::default(),
         interim_review: InterimReview::default(),
         presence: CandidatePresence::default(),
@@ -1415,6 +1468,7 @@ struct RoomIdentities<'a> {
 #[derive(Clone, Copy)]
 struct InterviewContext<'a> {
     config: &'a AgentConfig,
+    keys: &'a Arc<GeminiKeys>,
     boot: &'a RuntimeBootstrap<'a>,
     started_at: Instant,
 }
@@ -1578,7 +1632,7 @@ async fn handle_data_packet(
         context.state,
         &reason,
         interview.started_at.elapsed().as_secs_f64() / 60.0,
-        &interview.config.google_api_key,
+        interview.keys,
     )
     .await?;
     context.gemini.shutdown().await?;

@@ -31,6 +31,8 @@ async fn static_file_rejects_traversal_and_dotfiles() {
     fs::write(root.join(".env.local"), "not yours").unwrap();
     fs::write(root.join("sub/.env"), "not yours").unwrap();
     fs::write(root.join("trailing."), "not yours").unwrap();
+    #[cfg(windows)]
+    fs::create_dir_all(root.join("back")).unwrap();
     fs::write(root.join("back\\slash.js"), "not yours").unwrap();
 
     // The control, and the thing that makes the refusals below mean something:
@@ -147,7 +149,7 @@ async fn embedded_web_assets_serve_without_a_web_directory() {
     let response = reqwest::get(&format!("{base}/.git/config")).await.unwrap();
     assert_ne!(response.status(), 200);
 
-    server.abort();
+    server.shutdown().await;
 }
 
 /// The fallback is per file, not per tree. Gating it on whether the web root
@@ -198,7 +200,7 @@ async fn embedded_assets_fill_gaps_in_a_partial_web_directory() {
         &interview[..interview.len().min(200)]
     );
 
-    server.abort();
+    server.shutdown().await;
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -302,7 +304,7 @@ async fn vendored_assets_are_served_typed_and_cached() {
         .unwrap();
     assert_eq!(compressed.headers()["content-encoding"], "gzip");
 
-    server.abort();
+    server.shutdown().await;
 }
 
 #[tokio::test]
@@ -377,7 +379,7 @@ async fn static_server_serves_health_fixture_and_missing_asset() {
     let pinned_etag = pinned.headers().get("etag").unwrap().clone();
 
     fs::write(&app_js, "globalThis.loaded = null;").unwrap();
-    set_modified(&app_js, same_second + Duration::from_nanos(1));
+    set_modified(&app_js, same_second + Duration::from_millis(1));
 
     let changed = client
         .get(format!("{base}/app.js"))
@@ -388,7 +390,7 @@ async fn static_server_serves_health_fixture_and_missing_asset() {
     assert_eq!(
         changed.status(),
         200,
-        "a same-length edit one nanosecond later must still invalidate the cache"
+        "a same-length edit one millisecond later must still invalidate the cache"
     );
     assert_eq!(changed.text().await.unwrap(), "globalThis.loaded = null;");
 
@@ -410,7 +412,7 @@ async fn static_server_serves_health_fixture_and_missing_asset() {
         .unwrap();
     assert_eq!(missing.status(), 404);
 
-    server.abort();
+    server.shutdown().await;
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -434,7 +436,7 @@ async fn runtime_config_can_disable_compiled_language_runs() {
         enabled.text().await.unwrap(),
         "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = true;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"https://godbolt.org\";\nglobalThis.CODETRIAL_RECORDING_ENABLED = false;\nglobalThis.CODETRIAL_CONSENT_VERSION = \"2026-08-21\";\nglobalThis.CODETRIAL_REPLAY_VERSION = 1;\n"
     );
-    enabled_server.abort();
+    enabled_server.shutdown().await;
 
     let mut disabled_config = web_config();
     disabled_config.compiler_explorer_enabled = false;
@@ -449,7 +451,7 @@ async fn runtime_config_can_disable_compiled_language_runs() {
         disabled.text().await.unwrap(),
         "globalThis.CODETRIAL_COMPILER_EXPLORER_ENABLED = false;\nglobalThis.CODETRIAL_COMPILER_EXPLORER_BASE_URL = \"\";\nglobalThis.CODETRIAL_RECORDING_ENABLED = false;\nglobalThis.CODETRIAL_CONSENT_VERSION = \"2026-08-21\";\nglobalThis.CODETRIAL_REPLAY_VERSION = 1;\n"
     );
-    disabled_server.abort();
+    disabled_server.shutdown().await;
 
     // The page cannot know whether to show the consent step without being told,
     // and it must not guess: a candidate shown no notice on a recording server
@@ -470,7 +472,7 @@ async fn runtime_config_can_disable_compiled_language_runs() {
         "globalThis.CODETRIAL_CONSENT_VERSION = \"{}\";",
         codetrial::recording::CONSENT_VERSION
     )));
-    recording_server.abort();
+    recording_server.shutdown().await;
 }
 
 /// The two stores must answer the same URL the same way.
@@ -529,6 +531,6 @@ async fn disk_and_embedded_stores_resolve_urls_identically() {
         );
     }
 
-    disk_server.abort();
-    embedded_server.abort();
+    disk_server.shutdown().await;
+    embedded_server.shutdown().await;
 }
