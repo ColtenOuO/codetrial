@@ -282,7 +282,7 @@ fn log_hint_hands_out_one_rung_per_request_and_holds_the_last_for_an_approach() 
 #[test]
 fn greeting_introduces_the_scenario_and_never_the_published_problem() {
     // The template's own rules, once; the loop is for what each problem brings.
-    let opening = greeting();
+    let opening = greeting(InterviewMode::Coding);
     assert!(opening.contains("may ask for a hint if they get stuck"));
     assert!(opening.contains("without naming any published problem, practice site"));
     assert!(opening.contains("do not volunteer a constraint, edge case, or hint"));

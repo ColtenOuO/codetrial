@@ -18,7 +18,7 @@
 //! reads a correct prompt differently.
 
 use codetrial::agent::{
-    InterviewGrounding, InterviewLoop, InterviewProfile, Problem, RuntimeState,
+    InterviewGrounding, InterviewLoop, InterviewMode, InterviewProfile, Problem, RuntimeState,
     build_instructions_for_plan, find_problem, get_problem, greeting, log_hint_text,
     names_published_problem,
 };
@@ -403,7 +403,7 @@ impl Conversation {
                 .json(&json!({
                     "systemInstruction": { "parts": [{ "text": self.instructions }] },
                     "contents": self.contents,
-                    "tools": [{ "functionDeclarations": live_tool_declarations(self.state.interview_loop) }],
+                    "tools": [{ "functionDeclarations": live_tool_declarations(self.state.interview_loop, self.state.interview_mode) }],
                     "generationConfig": { "temperature": 0.7 },
                 }))
                 .send()
@@ -421,7 +421,7 @@ impl Conversation {
     }
 
     async fn generate_local(&self, base: &str) -> Value {
-        let tools = live_tool_declarations(self.state.interview_loop)
+        let tools = live_tool_declarations(self.state.interview_loop, self.state.interview_mode)
             .as_array()
             .into_iter()
             .flatten()
@@ -610,6 +610,7 @@ fn a_played_candidate_is_read_by_what_it_asks() {
         &InterviewGrounding::default(),
         InterviewLoop::CodingBehavioral,
         false,
+        InterviewMode::Coding,
     );
     let answered = "Each distinct set of three values is reported once. If the same values occur at different positions, they do \
                     not count as separate groups. The list can contain between 3 and 3000 adjustments, each between -10^5 and 10^5.";
@@ -887,6 +888,7 @@ async fn uncertain_speech_is_clarified_without_crediting_or_correcting_it() {
                     &InterviewGrounding::default(),
                     interview_loop,
                     false,
+                    InterviewMode::Coding,
                 ),
                 contents: vec![
                     json!({ "role": "user", "parts": [{ "text": "I am ready to work an example." }] }),
@@ -980,6 +982,7 @@ async fn live_interviewer_poses_the_variant_and_serves_hints_in_order() {
                 &InterviewGrounding::default(),
                 InterviewLoop::CodingBehavioral,
                 false,
+                InterviewMode::Coding,
             ),
             contents: Vec::new(),
             state: RuntimeState::for_problem(problem),
@@ -990,7 +993,7 @@ async fn live_interviewer_poses_the_variant_and_serves_hints_in_order() {
             panic!("three rungs");
         };
 
-        let opening = conversation.say(&greeting()).await;
+        let opening = conversation.say(&greeting(InterviewMode::Coding)).await;
         println!("[{}] Jim: {}", problem.id, opening.reply);
         if names_source(problem, &opening.reply) {
             fail(format!("the greeting names the source: {}", opening.reply));
@@ -1439,6 +1442,7 @@ async fn played_candidates_are_held_to_the_same_rules() {
                 &InterviewGrounding::default(),
                 InterviewLoop::CodingBehavioral,
                 false,
+                InterviewMode::Coding,
             );
             let mut conversation = Conversation {
                 client: reqwest::Client::new(),
@@ -1451,7 +1455,10 @@ async fn played_candidates_are_held_to_the_same_rules() {
             let mut candidate_so_far = String::new();
             let label = format!("{}/{persona}", problem.id);
 
-            let mut jim = conversation.say(&greeting()).await.reply;
+            let mut jim = conversation
+                .say(&greeting(InterviewMode::Coding))
+                .await
+                .reply;
             println!("[{label}] Jim: {jim}");
             if names_source(problem, &jim) {
                 failures.push(format!("{label}: the greeting names the source: {jim}"));

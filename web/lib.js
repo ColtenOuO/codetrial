@@ -250,6 +250,7 @@ export function renderValue(value) {
 /// LiveKit data-channel topics. Must match the TOPIC_* constants in
 /// src/runtime.rs.
 export const topics = {
+  board: "board_image",
   code: "code_update",
   control: "control",
   integrity: "integrity",
@@ -576,8 +577,36 @@ export function frameworkChecklist(round, phases) {
   };
 }
 
-function interviewMode(value) {
+function legacyReportMode(value) {
   return value === "practice" ? "practice" : "scored";
+}
+
+/// Which surface the interview runs on, from a URL parameter or a saved
+/// report. Anything this build does not recognize is a coding interview, which
+/// is what every report written before whiteboard mode existed is.
+export function interviewMode(value) {
+  return value === "whiteboard" ? "whiteboard" : "coding";
+}
+
+export function modeIsWhiteboard(value) {
+  return interviewMode(value) === "whiteboard";
+}
+
+/// The header a board's byte stream opens with.
+///
+/// A board is tens of kilobytes, which is several times what `publishData`
+/// carries in one packet, so it travels as a stream that LiveKit chunks over
+/// the same data channel. The agent reads `strokes` off these attributes and
+/// nothing else off the header, so this shape is a wire contract with
+/// `src/livekit/board.rs`; `tests/fixtures/board-stream.json` pins it.
+export function boardStreamOptions(sequence, strokes, size) {
+  return {
+    topic: topics.board,
+    name: `board-${sequence}.jpg`,
+    mimeType: "image/jpeg",
+    totalSize: size,
+    attributes: { strokes: String(strokes) },
+  };
 }
 
 export function codingLoop(value) {
@@ -587,7 +616,7 @@ export function codingLoop(value) {
 /// Reports written before the practice/scored split was removed still carry a
 /// mode, and the viewer shows what they say. Nothing produces one any more.
 export function modeLabel(value) {
-  return interviewMode(value) === "practice" ? "Practice" : "Scored";
+  return legacyReportMode(value) === "practice" ? "Practice" : "Scored";
 }
 
 export function loopLabel(value) {
@@ -605,8 +634,8 @@ const textEncoder = new TextEncoder();
 /// function-local, moving it left the whole suite green with the supported-card
 /// branch no longer rendering, which is the defect a local constant invites.
 export const ACTIVE_CONTRACT = {
-  bundleVersion: 26,
-  livePromptVersion: 18,
+  bundleVersion: 27,
+  livePromptVersion: 19,
   reportPromptVersion: 15,
   reportSchemaVersion: 2,
   rubricVersion: 1,
@@ -681,6 +710,7 @@ function reportEvidence(raw) {
   const frameworkSources = new Set([
     "candidate_speech",
     "editor_snapshot",
+    "board_snapshot",
     "test_event",
     "session_timing",
   ]);
@@ -877,7 +907,7 @@ export function sanitizeReport(raw) {
   // Only what the report actually recorded. Defaulting this to "scored" put a
   // mode on every new report and made the header announce a distinction that no
   // longer exists; a report written before the split still says what it was.
-  const mode = raw?.mode === undefined ? undefined : interviewMode(raw.mode);
+  const mode = raw?.mode === undefined ? undefined : legacyReportMode(raw.mode);
   // Defaulted for the round arithmetic below, which has always assumed the
   // two-round shape, but reported only where the report recorded it. Naming a
   // loop on a report written before loops existed describes a session that

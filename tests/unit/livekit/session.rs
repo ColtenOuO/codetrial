@@ -431,6 +431,51 @@ fn a_requested_hint_returns_the_editor_with_its_clue() {
     );
 }
 
+/// At a whiteboard the hint comes alone: there is no editor to fence, and the
+/// board the clue is fitted to is the latest image the model was sent.
+#[test]
+fn a_requested_hint_at_a_whiteboard_brings_no_editor() {
+    let mut state = RuntimeState {
+        interview_mode: crate::agent::InterviewMode::Whiteboard,
+        hint_ladder: &["first rung", "second rung"],
+        ..RuntimeState::default()
+    };
+    let asked = execute_tool_call(
+        &mut state,
+        &GeminiFunctionCall {
+            id: "1".to_string(),
+            name: TOOL_LOG_HINT.to_string(),
+            args: serde_json::json!({ "requested": true }),
+        },
+    );
+    let asked = asked["result"].as_str().unwrap();
+    assert!(asked.contains("first rung"), "{asked}");
+    assert!(!asked.contains("UNTRUSTED EDITOR"), "{asked}");
+}
+
+/// `read_board` answers with what a picture cannot say and asks the room loop
+/// to send the picture, since a tool response cannot carry one.
+#[test]
+fn reading_the_board_asks_for_it_to_be_sent_again() {
+    let mut state = RuntimeState {
+        interview_mode: crate::agent::InterviewMode::Whiteboard,
+        board_snapshots: 3,
+        board_strokes: 12,
+        ..RuntimeState::default()
+    };
+    let answer = execute_tool_call(
+        &mut state,
+        &GeminiFunctionCall {
+            id: "1".to_string(),
+            name: TOOL_READ_BOARD.to_string(),
+            args: serde_json::json!({}),
+        },
+    );
+    let answer = answer["result"].as_str().unwrap();
+    assert!(answer.contains("12 strokes"), "{answer}");
+    assert!(state.board_resend_requested);
+}
+
 fn position_of(text: &str, needle: &str) -> usize {
     text.find(needle)
         .unwrap_or_else(|| panic!("{needle:?} is not in:\n{text}"))

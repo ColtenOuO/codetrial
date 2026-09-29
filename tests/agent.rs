@@ -22,6 +22,20 @@ fn instructions(problem: &Problem, duration_min: u32) -> String {
         &InterviewGrounding::default(),
         InterviewLoop::CodingBehavioral,
         false,
+        InterviewMode::Coding,
+    )
+}
+
+/// The same, at a whiteboard.
+fn board_instructions(problem: &Problem, duration_min: u32) -> String {
+    build_instructions_for_plan(
+        problem,
+        duration_min,
+        &InterviewProfile::default(),
+        &InterviewGrounding::default(),
+        InterviewLoop::CodingBehavioral,
+        false,
+        InterviewMode::Whiteboard,
     )
 }
 
@@ -277,6 +291,7 @@ fn prompt_samples() -> Value {
             &InterviewGrounding::default(),
             InterviewLoop::CodingBehavioral,
             false,
+            InterviewMode::Coding,
         ),
         "instructionsExamplesHidden": build_instructions_for_plan(
             problem,
@@ -285,8 +300,25 @@ fn prompt_samples() -> Value {
             &InterviewGrounding::default(),
             InterviewLoop::CodingBehavioral,
             true,
+            InterviewMode::Coding,
         ),
-        "greeting": greeting(),
+        "boardInstructions": board_instructions(problem, 45),
+        "greeting": greeting(InterviewMode::Coding),
+        "boardGreeting": greeting(InterviewMode::Whiteboard),
+        "boardSilenceEmpty": board_silence_nudge(&empty, 0),
+        "boardSilenceDrawn": board_silence_nudge(&working, 17),
+        "boardColdRestart": cold_restart(&RuntimeState {
+            interview_mode: InterviewMode::Whiteboard,
+            board_snapshots: 4,
+            board_strokes: 22,
+            ..RuntimeState::default()
+        }),
+        "boardColdRestartEmpty": cold_restart(&RuntimeState {
+            interview_mode: InterviewMode::Whiteboard,
+            ..RuntimeState::default()
+        }),
+        "readBoard": read_board_text(22, 4, Some(9), 31),
+        "readBoardEmpty": read_board_text(0, 0, None, 44),
         "languageChoice": language_choice("C++", LanguageChoiceContext::Start),
         "languageSwitch": language_choice("Java", LanguageChoiceContext::SwitchWithCode),
         "silenceBehavioral": behavioral_silence_nudge(),
@@ -905,3 +937,6 @@ mod problems;
 
 #[path = "agent/runtime.rs"]
 mod runtime;
+
+#[path = "agent/whiteboard.rs"]
+mod whiteboard;

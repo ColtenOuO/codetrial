@@ -12,9 +12,10 @@ use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async, tungstenite::protocol::Message,
 };
 
+use crate::agent::InterviewMode;
 use crate::percent_encode_component;
 use crate::runtime::{
-    RuntimeBootstrap, TOOL_END_INTERVIEW, TOOL_LOG_HINT, TOOL_READ_EDITOR,
+    RuntimeBootstrap, TOOL_END_INTERVIEW, TOOL_LOG_HINT, TOOL_READ_BOARD, TOOL_READ_EDITOR,
     TOOL_RECORD_FRAMEWORK_EVIDENCE,
 };
 
@@ -1382,8 +1383,22 @@ fn redact_api_keys(text: &str, api_keys: &[String]) -> String {
 /// A coding-only session is not offered `end_interview` at all: only the
 /// timer or the candidate ends it, and a tool the platform always refuses
 /// only invites a goodbye before the refusal arrives.
-pub fn live_tool_declarations(interview_loop: crate::agent::InterviewLoop) -> Value {
-    let mut tools = vec![
+///
+/// The reading tool and the evidence sources follow the mode, and they follow
+/// it here rather than being offered together and refused later. A model that
+/// is shown `read_editor` in a whiteboard interview calls it, and the only
+/// honest answer is that there is no editor, which costs a turn of the
+/// candidate's time to say.
+pub fn live_tool_declarations(
+    interview_loop: crate::agent::InterviewLoop,
+    mode: InterviewMode,
+) -> Value {
+    let read_tool = if mode.is_whiteboard() {
+        json!({
+            "name": TOOL_READ_BOARD,
+            "description": "Put the candidate's latest whiteboard in front of you again, with how much is on it, when it was drawn and the minutes left."
+        })
+    } else {
         json!({
             "name": TOOL_READ_EDITOR,
             "description": "The editor's language and numbered code, the latest test run and the minutes left. Read only code the current question needs that no event or tool answer has shown you; start at a known relevant line rather than refilling the whole editor.",
@@ -1393,7 +1408,20 @@ pub fn live_tool_declarations(interview_loop: crate::agent::InterviewLoop) -> Va
                     "fromLine": { "type": "INTEGER", "description": "The line to start from, when a cut answer names one." }
                 }
             }
-        }),
+        })
+    };
+    let evidence_sources = if mode.is_whiteboard() {
+        json!(["candidate_speech", "board_snapshot", "session_timing"])
+    } else {
+        json!([
+            "candidate_speech",
+            "editor_snapshot",
+            "test_event",
+            "session_timing"
+        ])
+    };
+    let mut tools = vec![
+        read_tool,
         json!({
             "name": TOOL_LOG_HINT,
             "description": "Record a hint: requested true before one they asked for, then give the clue it returns with their editor; requested false after any other.",
@@ -1407,7 +1435,7 @@ pub fn live_tool_declarations(interview_loop: crate::agent::InterviewLoop) -> Va
         }),
         json!({
             "name": TOOL_RECORD_FRAMEWORK_EVIDENCE,
-            "description": "Record REACTO or STAR evidence present in their speech, an editor snapshot or a test event.",
+            "description": "Record REACTO or STAR evidence present in their speech or on their editor, test run or board.",
 
             // Schema.Type is an enum, so these are its value names, not free
             // text. Lowercase happens to be accepted here and is rejected on
@@ -1417,7 +1445,7 @@ pub fn live_tool_declarations(interview_loop: crate::agent::InterviewLoop) -> Va
                 "type": "OBJECT",
                 "properties": {
                     "phase": { "type": "STRING", "enum": ["repeat", "example", "algorithm", "coding", "test", "optimizations", "situation", "task", "action", "result"] },
-                    "source": { "type": "STRING", "enum": ["candidate_speech", "editor_snapshot", "test_event", "session_timing"] },
+                    "source": { "type": "STRING", "enum": evidence_sources },
                     "kind": { "type": "STRING", "enum": ["observed", "inferred", "skipped"] },
                     "confidence": { "type": "INTEGER", "minimum": 0, "maximum": 100 },
                     "summary": { "type": "STRING", "description": "Short evidence-grounded summary without scores or private rubric text." }
@@ -1561,7 +1589,7 @@ fn live_setup_message(boot: &RuntimeBootstrap<'_>, resume: Option<&str>) -> Valu
                     { "text": boot.instructions }
                 ]
             },
-            "tools": [{ "functionDeclarations": live_tool_declarations(boot.interview_loop) }],
+            "tools": [{ "functionDeclarations": live_tool_declarations(boot.interview_loop, boot.interview_mode) }],
 
             // Both fields are documented as hints, not locks, and they shape
             // only the transcript the notes, the report and recovery read: the
