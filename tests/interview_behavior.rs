@@ -971,111 +971,124 @@ async fn live_interviewer_poses_the_variant_and_serves_hints_in_order() {
     let problems = selected_problems(&ids);
     let mut failures = Vec::new();
 
-    for problem in problems {
-        let mut conversation = Conversation {
-            client: reqwest::Client::new(),
-            backend: backend.clone(),
-            instructions: build_instructions_for_plan(
-                problem,
-                45,
-                &InterviewProfile::default(),
-                &InterviewGrounding::default(),
-                InterviewLoop::CodingBehavioral,
-                false,
-                InterviewMode::Coding,
-            ),
-            contents: Vec::new(),
-            state: RuntimeState::for_problem(problem),
-        };
-        let mut fail = |what: String| failures.push(format!("{}: {what}", problem.id));
-        let brief = problem.variant().brief_text();
-        let [_, _, key_step] = problem.variant().hints else {
-            panic!("three rungs");
-        };
+    // Both surfaces: the whiteboard is offered its own greeting, tools and
+    // instructions, and a rule that held at the editor is not evidence it holds
+    // there.
+    for mode in [InterviewMode::Coding, InterviewMode::Whiteboard] {
+        for problem in problems.iter().copied() {
+            let mut conversation = Conversation {
+                client: reqwest::Client::new(),
+                backend: backend.clone(),
+                instructions: build_instructions_for_plan(
+                    problem,
+                    45,
+                    &InterviewProfile::default(),
+                    &InterviewGrounding::default(),
+                    InterviewLoop::CodingBehavioral,
+                    false,
+                    mode,
+                ),
+                contents: Vec::new(),
+                state: RuntimeState {
+                    interview_mode: mode,
+                    ..RuntimeState::for_problem(problem)
+                },
+            };
+            let mut fail =
+                |what: String| failures.push(format!("{} ({mode:?}): {what}", problem.id));
+            let brief = problem.variant().brief_text();
+            let [_, _, key_step] = problem.variant().hints else {
+                panic!("three rungs");
+            };
 
-        let opening = conversation.say(&greeting(InterviewMode::Coding)).await;
-        println!("[{}] Jim: {}", problem.id, opening.reply);
-        if names_source(problem, &opening.reply) {
-            fail(format!("the greeting names the source: {}", opening.reply));
-        }
-        if let Some(figure) = states_limit(problem, &opening.reply) {
-            fail(format!("the greeting volunteers the limit {figure}"));
-        }
-
-        let language = conversation.say("I'll use Python.").await;
-        println!("[{}] Jim: {}", problem.id, language.reply);
-        if let Some(figure) = states_limit(problem, &language.reply) {
-            fail(format!("volunteered the limit {figure} before being asked"));
-        }
-
-        let guess = conversation
-            .say(&format!(
-                "Quick question first: is this basically the LeetCode problem {}?",
-                problem.title
-            ))
-            .await;
-        println!("[{}] Jim: {}", problem.id, guess.reply);
-        if names_source(problem, &guess.reply) {
-            fail(format!("confirmed or repeated the source: {}", guess.reply));
-        }
-
-        let limit = conversation
-            .say("What is the largest input I should plan for?")
-            .await;
-        println!("[{}] Jim: {}", problem.id, limit.reply);
-        if states_limit(problem, &limit.reply).is_none() {
-            fail(format!("did not answer the size question: {}", limit.reply));
-        }
-
-        for (asked, rungs) in [
-            ("I'm honestly stuck on how to start. Can I get a hint?", 1),
-            ("Thanks. Could I get another hint?", 2),
-        ] {
-            let hint = conversation.say(asked).await;
-            println!("[{}] Jim: {}", problem.id, hint.reply);
-            if !hint.hint_calls.contains(&true) {
-                fail(format!("answered {asked:?} without log_hint requested"));
+            let opening = conversation.say(&greeting(mode)).await;
+            println!("[{}] Jim: {}", problem.id, opening.reply);
+            if names_source(problem, &opening.reply) {
+                fail(format!("the greeting names the source: {}", opening.reply));
             }
-            if conversation.state.hint_rungs_given != rungs {
-                fail(format!(
-                    "expected {rungs} rungs served, found {}",
-                    conversation.state.hint_rungs_given
-                ));
+            if let Some(figure) = states_limit(problem, &opening.reply) {
+                fail(format!("the greeting volunteers the limit {figure}"));
             }
-            if shared_run(&hint.reply, problem.optimal) >= 5 {
-                fail(format!(
-                    "a hint recites the optimal approach: {}",
-                    hint.reply
-                ));
+
+            // A whiteboard greeting asks for no language, so there is nothing
+            // to answer it with.
+            if !mode.is_whiteboard() {
+                let language = conversation.say("I'll use Python.").await;
+                println!("[{}] Jim: {}", problem.id, language.reply);
+                if let Some(figure) = states_limit(problem, &language.reply) {
+                    fail(format!("volunteered the limit {figure} before being asked"));
+                }
             }
-            let beyond = named_beyond(&hint.reply, &format!("{} {brief}", hint.served));
+
+            let guess = conversation
+                .say(&format!(
+                    "Quick question first: is this basically the LeetCode problem {}?",
+                    problem.title
+                ))
+                .await;
+            println!("[{}] Jim: {}", problem.id, guess.reply);
+            if names_source(problem, &guess.reply) {
+                fail(format!("confirmed or repeated the source: {}", guess.reply));
+            }
+
+            let limit = conversation
+                .say("What is the largest input I should plan for?")
+                .await;
+            println!("[{}] Jim: {}", problem.id, limit.reply);
+            if states_limit(problem, &limit.reply).is_none() {
+                fail(format!("did not answer the size question: {}", limit.reply));
+            }
+
+            for (asked, rungs) in [
+                ("I'm honestly stuck on how to start. Can I get a hint?", 1),
+                ("Thanks. Could I get another hint?", 2),
+            ] {
+                let hint = conversation.say(asked).await;
+                println!("[{}] Jim: {}", problem.id, hint.reply);
+                if !hint.hint_calls.contains(&true) {
+                    fail(format!("answered {asked:?} without log_hint requested"));
+                }
+                if conversation.state.hint_rungs_given != rungs {
+                    fail(format!(
+                        "expected {rungs} rungs served, found {}",
+                        conversation.state.hint_rungs_given
+                    ));
+                }
+                if shared_run(&hint.reply, problem.optimal) >= 5 {
+                    fail(format!(
+                        "a hint recites the optimal approach: {}",
+                        hint.reply
+                    ));
+                }
+                let beyond = named_beyond(&hint.reply, &format!("{} {brief}", hint.served));
+                if !beyond.is_empty() {
+                    fail(format!(
+                        "a hint names {beyond:?} beyond its clue: {}",
+                        hint.reply
+                    ));
+                }
+            }
+
+            // No approach has been offered, so the key step stays withheld
+            // unless the model recorded an approach on the candidate's behalf,
+            // which is its own failure.
+            let third = conversation
+                .say("Still not seeing it. One more hint?")
+                .await;
+            println!("[{}] Jim: {}", problem.id, third.reply);
+            if conversation.state.hint_rungs_given > 2 {
+                fail("served the key step before the candidate stated an approach".to_string());
+            }
+            if shared_run(&third.reply, key_step) >= 6 {
+                fail(format!("spoke the withheld rung: {}", third.reply));
+            }
+            let beyond = named_beyond(&third.reply, &format!("{} {brief}", third.served));
             if !beyond.is_empty() {
                 fail(format!(
-                    "a hint names {beyond:?} beyond its clue: {}",
-                    hint.reply
+                    "the withheld request names {beyond:?} instead: {}",
+                    third.reply
                 ));
             }
-        }
-
-        // No approach has been offered, so the key step stays withheld unless
-        // the model recorded an approach on the candidate's behalf, which is
-        // its own failure.
-        let third = conversation
-            .say("Still not seeing it. One more hint?")
-            .await;
-        println!("[{}] Jim: {}", problem.id, third.reply);
-        if conversation.state.hint_rungs_given > 2 {
-            fail("served the key step before the candidate stated an approach".to_string());
-        }
-        if shared_run(&third.reply, key_step) >= 6 {
-            fail(format!("spoke the withheld rung: {}", third.reply));
-        }
-        let beyond = named_beyond(&third.reply, &format!("{} {brief}", third.served));
-        if !beyond.is_empty() {
-            fail(format!(
-                "the withheld request names {beyond:?} instead: {}",
-                third.reply
-            ));
         }
     }
 

@@ -431,6 +431,22 @@ async function checkWhiteboardInterview(page, pageErrors) {
   if (pens !== 4)
     throw new Error(`the board offered ${pens} pens rather than 4`);
   await clearMediaGate(page);
+  const clear = page.getByRole("button", { name: "Clear board" });
+  if (!(await clear.isDisabled()))
+    throw new Error("an empty board offered to clear itself");
+  const bounds = await page.locator("#board").boundingBox();
+  if (!bounds) throw new Error("the visible board had no drawing bounds");
+  await page.mouse.move(bounds.x + 40, bounds.y + 40);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + 90, bounds.y + 90);
+  await page.mouse.up();
+  if (await clear.isDisabled())
+    throw new Error("the board could not be cleared after drawing");
+  await clear.click();
+  if (!(await clear.isDisabled()))
+    throw new Error("clearing the board left it non-empty");
+  if (await page.getByRole("button", { name: "Undo" }).isDisabled())
+    throw new Error("a cleared board could not be restored with Undo");
   // The editor is removed rather than hidden, so its absence is what says the
   // page understood which interview it is holding.
   if (await page.locator(".editor-panel").count()) {
@@ -441,7 +457,7 @@ async function checkWhiteboardInterview(page, pageErrors) {
     throw new Error(`the whiteboard interview raised:\n${raised.join("\n")}`);
   }
   console.log(
-    "whiteboard: the board came up and the media gate opened behind it",
+    "whiteboard: the board drew, cleared, and opened the media gate behind it",
   );
 }
 

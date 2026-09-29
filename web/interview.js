@@ -69,6 +69,7 @@ import {
   isYieldShortcut,
   turnCountdown,
   turnWindowMs,
+  uncapturedBoardPhases,
 } from "./lib.js";
 import {
   attachAvatarAnalyser,
@@ -264,6 +265,13 @@ const board = {
   /// the name for nothing, and that is deliberate: it holds the newest board
   /// it finished reading, not the highest number it has seen.
   sequence: 0,
+  /// Phase ids already captured. A reconnect can restate the whole framework
+  /// checklist, and restating it must not create a second checkpoint for every
+  /// phase the interviewer had already banked.
+  checkpoints: new Set(),
+  /// A phase can complete while a pointer is still down. Its checkpoint waits
+  /// for pointerup so the JPEG and replay operations describe the same stroke.
+  pendingCheckpoints: [],
 };
 let behavioralMinutes =
   interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
@@ -1900,6 +1908,7 @@ function receiveControl(bytes) {
       Array.isArray(message.phases)
     ) {
       frameworkPhases = message.phases;
+      captureBoardCheckpoints(frameworkPhases);
       renderFrameworkProgress();
     } else if (
       message.type === "round_state" &&
@@ -2416,6 +2425,10 @@ function endInterview(reason) {
   if (whiteboard) {
     clearTimeout(board.settle);
     recordBoardOps();
+    // The report is frozen as soon as the agent receives `end_interview`, so
+    // the current pixels have to enter the stream first. This also covers an
+    // interview ended before the next phase checkpoint or settle fired.
+    queueBoardPublish();
   }
   recordReplay("lifecycle", { state: "ended", reason });
   void flushReplay();
@@ -2466,10 +2479,16 @@ function endInterview(reason) {
       }, REPORT_ESCAPE_WAIT_MS),
     ];
   }
-  publish(
-    topics.control,
-    endInterviewPayload(reason, currentCode(), state.language),
-  );
+  const publishEnd = () =>
+    publish(
+      topics.control,
+      endInterviewPayload(reason, currentCode(), state.language),
+    );
+  if (whiteboard) {
+    void board.publishing.then(publishEnd);
+  } else {
+    publishEnd();
+  }
   if (!reportComing) setTimeout(showReport, 300);
 }
 
@@ -2952,6 +2971,7 @@ function bindBoardPointer() {
       }
       paintBoard();
       scheduleBoardPublish();
+      flushPendingBoardCheckpoints();
     });
   }
 }
@@ -2988,7 +3008,7 @@ function paintBoard() {
   drawBoard(board.context, board.model.strokes(), BOARD_WIDTH, BOARD_HEIGHT);
   nodes.boardUndo.disabled = !board.model.canUndo();
   nodes.boardRedo.disabled = !board.model.canRedo();
-  nodes.boardClear.disabled = !board.model.canUndo();
+  nodes.boardClear.disabled = board.model.strokeCount() === 0;
 }
 
 /// Restarts the settle timer. A candidate drawing steadily therefore sends
@@ -2999,10 +3019,45 @@ function scheduleBoardPublish() {
   board.settle = setTimeout(() => {
     board.settle = null;
     recordBoardOps();
-    board.publishing = board.publishing.then(publishBoard).catch((error) => {
-      console.warn("codetrial board_publish_failed", error);
-    });
+    queueBoardPublish();
   }, BOARD_SETTLE_MS);
+}
+
+/// Captures every newly completed coding phase at the board.
+///
+/// The control packet is an accumulating list, not a transition, so compare it
+/// with the phases already captured. Only the six coding ids are accepted; an
+/// untrusted control packet cannot turn an arbitrary string into a report
+/// attachment or a replay label.
+function captureBoardCheckpoints(phases) {
+  if (!whiteboard) return;
+  for (const id of uncapturedBoardPhases(phases, board.checkpoints)) {
+    board.checkpoints.add(id);
+    if (board.model.isDrawing()) {
+      board.pendingCheckpoints.push(id);
+      continue;
+    }
+    checkpointBoard(id);
+  }
+}
+
+function flushPendingBoardCheckpoints() {
+  if (board.model.isDrawing()) return;
+  for (const phase of board.pendingCheckpoints.splice(0))
+    checkpointBoard(phase);
+}
+
+/// Freezes one phase before the candidate can clear or change the board.
+///
+/// An empty operation list is intentional: the phase marker still names the
+/// board state produced by every earlier operation. The JPEG is captured now,
+/// before it joins the serialized upload chain, so a slow earlier stream cannot
+/// make this checkpoint photograph a later drawing.
+function checkpointBoard(phase) {
+  clearTimeout(board.settle);
+  board.settle = null;
+  recordBoardOps(phase);
+  queueBoardPublish(phase);
 }
 
 /// The board as the candidate left it, for their own report card.
@@ -3037,29 +3092,45 @@ function finalBoardImage() {
 /// is the board's own record of what has happened to it since somebody asked,
 /// and left unasked for an hour it is every stroke of the interview held in
 /// memory twice.
-function recordBoardOps() {
-  for (const ops of boardOpBatches(board.model.takeOps())) {
-    recordReplay("board", { ops });
+function recordBoardOps(checkpoint = "") {
+  const batches = boardOpBatches(board.model.takeOps());
+  if (!batches.length && checkpoint) {
+    recordReplay("board", { ops: [], checkpoint });
+    return;
+  }
+  for (const [index, ops] of batches.entries()) {
+    const payload = { ops };
+    if (checkpoint && index === batches.length - 1)
+      payload.checkpoint = checkpoint;
+    recordReplay("board", payload);
   }
 }
 
-/// Sends the board as one JPEG over its own byte stream.
+/// Captures the board and appends its upload to the one stream-at-a-time chain.
+function queueBoardPublish(checkpoint = "") {
+  const strokes = board.model.strokeCount();
+  const image = new Promise((resolve) => {
+    nodes.board.toBlob(resolve, "image/jpeg", BOARD_JPEG_QUALITY);
+  });
+  board.publishing = board.publishing
+    .then(async () => publishBoard(await image, strokes, checkpoint))
+    .catch((error) => {
+      console.warn("codetrial board_publish_failed", error);
+    });
+}
+
+/// Sends one already-captured board JPEG over its own byte stream.
 ///
 /// Dropped rather than queued while the room is down. A board is the whole
 /// state of the drawing, so the next settle after the reconnect carries
 /// everything this one would have, where the publish queue would deliver a
 /// stale board first.
-async function publishBoard() {
-  if (!state.room || !state.connected) return;
-  const strokes = board.model.strokeCount();
-  const blob = await new Promise((resolve) => {
-    nodes.board.toBlob(resolve, "image/jpeg", BOARD_JPEG_QUALITY);
-  });
-  if (!blob) return;
+async function publishBoard(blob, strokes, checkpoint) {
+  if (!state.room || !state.connected || !blob) return;
   const bytes = new Uint8Array(await blob.arrayBuffer());
   board.sequence += 1;
   const writer = await state.room.localParticipant.streamBytes(
-    boardStreamOptions(board.sequence, strokes, bytes.byteLength),
+    boardStreamOptions(board.sequence, strokes, bytes.byteLength, checkpoint),
   );
   await writer.write(bytes);
   await writer.close();

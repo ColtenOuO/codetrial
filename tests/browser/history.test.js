@@ -541,6 +541,8 @@ test("the response window panel says what the number is worth, in words a test c
       " ·  · ",
       " : ",
       "Code · ",
+      " checkpoint",
+      " board checkpoint",
       "/ passing",
     ]),
     "a string this page can say that is not in this list is one nobody chose",

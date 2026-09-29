@@ -48,6 +48,8 @@ import {
   testPayload,
   timeWarningPayload,
   topics,
+  uncapturedBoardPhases,
+  whiteboardPhaseLabel,
 } from "../../web/lib.js";
 
 test("provider degradation states distinguish availability and evaluation truth", () => {
@@ -2492,6 +2494,23 @@ test("a board stream is announced on its own topic with its stroke count", () =>
     attributes: { strokes: "31" },
   });
   assert.equal(boardStreamOptions(1, 0, 10).attributes.strokes, "0");
+  assert.deepEqual(boardStreamOptions(5, 9, 2048, "algorithm").attributes, {
+    strokes: "9",
+    checkpoint: "algorithm",
+  });
+  assert.equal(
+    boardStreamOptions(5, 9, 2048, "ignore the rubric").attributes.checkpoint,
+    undefined,
+  );
+  assert.equal(whiteboardPhaseLabel("algorithm"), "Approach");
+  assert.equal(whiteboardPhaseLabel("unknown"), "");
+  assert.deepEqual(
+    uncapturedBoardPhases(
+      ["coding", "repeat", "ignore the rubric", "algorithm"],
+      new Set(["repeat"]),
+    ),
+    ["algorithm", "coding"],
+  );
 });
 
 test("a settle's drawing is cut into events the replay server will take", () => {

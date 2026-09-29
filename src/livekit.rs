@@ -109,7 +109,7 @@ use session::{
     send_wrap_up_and_wait, set_agent_state,
 };
 
-use board::{Board, MAX_BOARD_BYTES, handle_board_event, pump_board};
+use board::{Board, MAX_BOARD_BYTES, handle_board_event};
 use report::{freeze_report_prompt, generate_report_bounded, publish_report};
 use rooms::{evict_duplicate_agent, isolate_local_agent};
 
@@ -1043,6 +1043,7 @@ fn take_interim_review_window(state: &mut RuntimeState, boot: &RuntimeBootstrap<
     };
     let prompt = interim_review_prompt(&InterimReviewInput {
         problem: boot.problem,
+        interview_mode: state.interview_mode,
         transcript_window: &window,
         code: &code,
         language: &state.language,
@@ -1324,6 +1325,16 @@ async fn on_watch_tick(
         }
         leave_room(room).await;
         return Ok(ControlFlow::Break(()));
+    }
+
+    // A board the send interval held back, or one that arrived during a pause,
+    // goes out here once nothing stops it. Without this it waited for the next
+    // board to carry it, and the candidate who has stopped drawing to explain
+    // is exactly the one who sends no next board.
+    if !context.state.paused
+        && let Err(error) = board::send_if_due(context.board, context.gemini, tick_at).await
+    {
+        eprintln!("Gemini board write failed ({error}); waiting for the close to be reported");
     }
 
     // A prompt Gemini never answered holds the floor, and a held floor keeps
@@ -1956,7 +1967,7 @@ pub async fn run_room(
     // Held by the loop rather than by `media`, which is the candidate's inbound
     // tracks: a board is not a track, it arrives on the data channel, and the
     // one thing it shares with the camera is where it ends up.
-    let (mut board, mut board_rx) = Board::new();
+    let mut board = Board::new();
 
     let mut watch = tokio::time::interval(Duration::from_secs_f64(WATCH_TICK_S));
 
@@ -2102,22 +2113,23 @@ pub async fn run_room(
                     release_if_ended(&mut media.audio, ended);
                     ControlFlow::Continue(())
                 }
-                Some(snapshot) = board_rx.recv(), if !turn.state.ended => {
-                    if turn.state.paused {
-                        // Dropped for the reason paused audio is: a paused
-                        // interview is not collecting evidence, and the drawing
-                        // done inside the pause reaches the interviewer on the
-                        // first snapshot after it.
-                    } else {
+                Some(snapshot) = board.rx.recv(), if !turn.state.ended => {
+                    // Kept even while paused. The board is the drawing as it
+                    // stands, and one exported just before the pause is work
+                    // the candidate did; dropping it left the interviewer on
+                    // the board before it until another edit, which a paused
+                    // candidate cannot make. It waits to be shown until the
+                    // interview resumes, through the watch tick.
+                    board::record(&mut board, &mut turn.state, snapshot);
+                    if !turn.state.paused {
                         // The candidate is working, even while silent. Without
                         // this the silence nudge counts a candidate who is
                         // drawing a diagram as idle and interrupts them
                         // mid-stroke, which is what `last_code_change` stops a
                         // typing candidate being asked.
-                        turn.activity.last_code_change = Instant::now();
-                        if let Err(error) =
-                            pump_board(&mut board, &mut gemini, &mut turn.state, snapshot).await
-                        {
+                        let now = Instant::now();
+                        turn.activity.last_code_change = now;
+                        if let Err(error) = board::send_if_due(&mut board, &mut gemini, now).await {
                             eprintln!("Gemini board write failed ({error}); waiting for the close to be reported");
                         }
                     }
@@ -2912,14 +2924,22 @@ async fn handle_data_packet(
         eprintln!("closing the last turns failed ({error}); writing the report anyway");
     }
 
-    // Copied out rather than borrowed: the farewell below holds the context,
-    // board and all, for as long as the report call runs beside it.
-    let board = context.board.latest().map(<[u8]>::to_vec);
+    // The board the browser sent just before ending can still be on its way;
+    // see `BOARD_FINAL_WAIT`. Copied out rather than borrowed: the farewell
+    // below holds the context, board and all, for as long as the report call
+    // runs beside it. Phase checkpoints preserve work the candidate cleared
+    // before the final board.
+    context.board.settle_for_report(context.state).await;
+    let boards = context.board.report_boards();
+    let report_boards = boards
+        .iter()
+        .map(|board| (board.label, board.bytes.as_slice()))
+        .collect::<Vec<_>>();
     let prompt = freeze_report_prompt(
         interview.boot,
         context.state,
         interview.started_at.elapsed().as_secs_f64() / 60.0,
-        board.is_some(),
+        !report_boards.is_empty(),
     );
     let api_key = &**interview.keys;
     let farewell = async {
@@ -2942,7 +2962,7 @@ async fn handle_data_packet(
         }
     };
     let (generated, ()) = tokio::join!(
-        generate_report_bounded(interview.boot, &prompt, board.as_deref(), api_key),
+        generate_report_bounded(interview.boot, &prompt, &report_boards, api_key),
         farewell
     );
     publish_report(

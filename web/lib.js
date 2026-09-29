@@ -575,6 +575,34 @@ export function frameworkChecklist(round, phases, mode) {
   };
 }
 
+/// The candidate-facing name of a whiteboard checkpoint.
+///
+/// Checkpoints carry the phase id rather than this label because the id is the
+/// stable evidence vocabulary. Replay derives the words with the same mapping
+/// as the live checklist, so a renamed step cannot leave old and new labels on
+/// the same page.
+export function whiteboardPhaseLabel(value) {
+  return (
+    frameworkChecklist("coding", [], "whiteboard").steps.find(
+      (step) => step.id === value,
+    )?.label || ""
+  );
+}
+
+/// Newly completed whiteboard phases, in REACTO order.
+///
+/// `phases` is a control packet, while `captured` is deliberately any iterable
+/// so the live page can hand over its Set. Returning ids from the closed
+/// framework list is what keeps an unknown string out of replay metadata and
+/// byte-stream attributes.
+export function uncapturedBoardPhases(phases, captured = []) {
+  const completed = new Set(Array.isArray(phases) ? phases : []);
+  const seen = new Set(captured);
+  return FRAMEWORKS.coding.steps
+    .map((step) => step.id)
+    .filter((phase) => completed.has(phase) && !seen.has(phase));
+}
+
 /// The line the hint card puts under the flow's name at a whiteboard.
 const WHITEBOARD_SCENARIO =
   "Working a problem at the board: what was asked for at each step of the coding round";
@@ -667,16 +695,18 @@ export function boardOpBatches(ops, budget = 24 * 1024) {
 ///
 /// A board is tens of kilobytes, which is several times what `publishData`
 /// carries in one packet, so it travels as a stream that LiveKit chunks over
-/// the same data channel. The agent reads `strokes` off these attributes and
-/// nothing else off the header, so this shape is a wire contract with
-/// `src/livekit/board.rs`; `tests/fixtures/board-stream.json` pins it.
-export function boardStreamOptions(sequence, strokes, size) {
+/// the same data channel. The agent reads `strokes` and the optional validated
+/// phase checkpoint off these attributes, so this shape is a wire contract
+/// with `src/livekit/board.rs`; `tests/fixtures/board-stream.json` pins it.
+export function boardStreamOptions(sequence, strokes, size, checkpoint = "") {
+  const attributes = { strokes: String(strokes) };
+  if (whiteboardPhaseLabel(checkpoint)) attributes.checkpoint = checkpoint;
   return {
     topic: topics.board,
     name: `board-${sequence}.jpg`,
     mimeType: "image/jpeg",
     totalSize: size,
-    attributes: { strokes: String(strokes) },
+    attributes,
   };
 }
 

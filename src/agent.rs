@@ -1543,8 +1543,12 @@ pub fn elapsed_ms(state: &RuntimeState) -> u64 {
         .min(u128::from(u64::MAX)) as u64
 }
 
-/// How long ago the interviewer was last shown a board, in whole seconds, or
+/// How long ago the candidate's newest board arrived, in whole seconds, or
 /// `None` before the first one.
+///
+/// Arrival rather than the last send, because what `read_board` reports with
+/// it is how long ago the candidate left the board that way, and the same call
+/// puts that board in front of the interviewer again.
 pub fn board_age_seconds(state: &RuntimeState) -> Option<u64> {
     Some(elapsed_ms(state).saturating_sub(state.last_board_at_ms?) / 1000)
 }

@@ -17,6 +17,7 @@ import {
   replayTimeline,
   responseWindowLabel,
   sanitizeReport,
+  whiteboardPhaseLabel,
 } from "/lib.js";
 import {
   BOARD_HEIGHT,
@@ -347,11 +348,16 @@ export function render(events) {
 
 function momentButton(moments, index) {
   const moment = moments[index];
+  const checkpoint =
+    moment.kind === "board"
+      ? whiteboardPhaseLabel(moment.payload?.checkpoint)
+      : "";
   const button = document.createElement("button");
   button.type = "button";
   button.className = "replay-moment";
   button.dataset.moment = String(index);
-  button.textContent = `${momentTime(moment.at)} · ${moment.kind}`;
+  const label = checkpoint ? `${checkpoint} checkpoint` : moment.kind;
+  button.textContent = `${momentTime(moment.at)} · ${label}`;
   button.addEventListener("click", () => showMoment(moments, index));
   return button;
 }
@@ -418,7 +424,12 @@ function showMoment(moments, index) {
   }
   latest = { code, language };
   if (drawn) {
-    nodes.momentLabel.textContent = "Whiteboard";
+    const checkpoint = whiteboardPhaseLabel(
+      moments[index]?.payload?.checkpoint,
+    );
+    nodes.momentLabel.textContent = checkpoint
+      ? `${checkpoint} board checkpoint`
+      : "Whiteboard";
     drawBoard(
       nodes.board.getContext("2d"),
       board.strokes(),

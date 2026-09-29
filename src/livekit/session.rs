@@ -936,6 +936,7 @@ pub fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) ->
         && !state.end_requested
         && [
             TOOL_READ_EDITOR,
+            TOOL_READ_BOARD,
             TOOL_LOG_HINT,
             TOOL_RECORD_FRAMEWORK_EVIDENCE,
         ]
@@ -1029,9 +1030,13 @@ fn tool_response(state: &mut RuntimeState, call: &GeminiFunctionCall) -> serde_j
             // to fit the clue to their code, and asking for the code first was
             // a whole round trip before it could say anything. The fences are
             // the ones `read_editor` answers with. A whiteboard has no editor
-            // to fence, and the board it would fit the clue to is already the
-            // latest image the model was sent.
-            if requested && !state.interview_mode.is_whiteboard() {
+            // to fence, so the board comes instead, the way `read_board` sends
+            // it: the newest board can still be inside the send interval, and a
+            // clue fitted to the one before it is fitted to work the candidate
+            // has already moved past.
+            if requested && state.interview_mode.is_whiteboard() {
+                state.board_resend_requested = true;
+            } else if requested {
                 state.code_shown = state.code.clone();
                 result.push_str("\n\n");
                 result.push_str(&read_editor_text(

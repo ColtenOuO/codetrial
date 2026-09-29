@@ -376,8 +376,8 @@ function boardCases() {
   return [
     { name: "first board", options: lib.boardStreamOptions(1, 3, 21_504) },
     {
-      name: "a dense diagram",
-      options: lib.boardStreamOptions(17, 214, 96_318),
+      name: "an approach checkpoint",
+      options: lib.boardStreamOptions(17, 214, 96_318, "algorithm"),
     },
     // A board that was cleared: no strokes, and still a board, because the
     // interviewer has to see that what they were asked about is gone.

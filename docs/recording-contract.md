@@ -840,7 +840,7 @@ so a producer from a later deploy does not stop a recording.
 |---|---|---|
 | `stage` | `{title, meta, remainingSeconds}` | the problem heading and the clock |
 | `editor` | `{code, language}` | the code panel, as text |
-| `board` | `{ops}`, each `{op: "stroke", color, width, points}` or `{op: "undo" \| "redo" \| "clear"}` | the whiteboard, redrawn from every op so far |
+| `board` | `{ops, checkpoint?}`, each op `{op: "stroke", color, width, points}` or `{op: "undo" \| "redo" \| "clear"}`; `checkpoint` is a completed REACTO phase id | the whiteboard, redrawn from every op so far, with completed phases named in the replay |
 | `tests` | `{passed, failed, total}` | one line, red if anything failed |
 | `avatar` | `{state}`, one of `speaking`, `thinking`, `listening` | Jim's expression and label |
 | `transcript` | `{speaker, text}` | nothing here; the replay page renders it |
@@ -865,6 +865,14 @@ so any moment of the interview can be redrawn rather than the few that could be
 photographed. `web/whiteboard.js` is the one model: the candidate draws on it,
 the replay page and this template rebuild from it, and a stroke it refuses
 while drawing is a stroke it refuses coming back off the wire.
+
+When the interviewer banks a REACTO phase, the browser adds a board event even
+if no stroke changed. That event names the phase and therefore freezes the
+current point in the operation journal for review. The same moment is exported
+as a JPEG with the phase id in its byte-stream header. The agent retains one
+image per phase for the report model, so clearing the live board cannot erase
+the Example or Approach evidence that came before it. Replay stores no JPEG:
+it rebuilds each checkpoint from the operations it already has.
 
 Cadence is where the per-interview budget goes. The editor rides the debounce
 the agent's `code_update` already uses; the board rides the same settle that

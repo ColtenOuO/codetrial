@@ -54,7 +54,7 @@ fn prompt_golden_digest_matches_versions() {
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
     let recorded_versions = (19, 16);
-    let recorded_digest = "a53b1458c13f4e5c8d636f2b99d011942aa3f473d37e27f43d3b30926dafda63";
+    let recorded_digest = "2756861a00ba2461b2a4583f7f44aa7393684eca2509259080af5bebe87acb1d";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -286,7 +286,7 @@ fn report_brief_states_the_hint_rung() {
 
     // A declined probe is unassessed, not failed, in both the scoring and the
     // phase rules, which the system instruction carries.
-    let rules = report_system_instruction();
+    let rules = report_system_instruction(InterviewMode::Coding);
     assert!(rules.contains("When the candidate cannot recall an example, declines to give one, or cannot share one, assess"));
     assert!(rules.contains("For an abandoned probe, use `null`"));
     assert!(
@@ -647,7 +647,9 @@ fn an_unrecognized_turn_is_left_out_of_assessment() {
     assert_eq!(marked[2], unrecognized);
     assert_eq!(marked[3..], lines[3..]);
     assert!(!transcript_for_report(&lines).contains('\u{8863}'));
-    assert!(report_system_instruction().contains(UNRECOGNIZED_TURN));
+    for mode in [InterviewMode::Coding, InterviewMode::Whiteboard] {
+        assert!(report_system_instruction(mode).contains(UNRECOGNIZED_TURN));
+    }
     assert!(interim_system_instruction().contains(UNRECOGNIZED_TURN));
 }
 

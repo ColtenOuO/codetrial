@@ -7,6 +7,12 @@ use super::*;
 use crate::config::load_from_pairs;
 use crate::runtime::bootstrap;
 
+/// An editor interview's report material: the editor's rules, nothing attached.
+const EDITOR: ReportMaterial<'static> = ReportMaterial {
+    mode: InterviewMode::Coding,
+    boards: &[],
+};
+
 #[tokio::test]
 async fn interim_failures_update_shared_cooldowns_without_retrying() {
     for status in [429, 401, 503, 400] {
@@ -287,7 +293,7 @@ async fn report_transport_fixture(
         &keys,
         &url,
         "prompt",
-        None,
+        EDITOR,
         &mut budget,
         backoff,
         "test-room",
@@ -399,7 +405,7 @@ async fn a_key_ruled_out_during_the_backoff_is_not_retried() {
         &keys,
         &url,
         "prompt",
-        None,
+        EDITOR,
         &mut budget,
         REPORT_RETRY_BACKOFF,
         "test-room",
@@ -927,8 +933,8 @@ fn report_retry_backoff_doubles_from_the_first_wait() {
 
 #[test]
 fn report_requests_are_session_local_and_never_reuse_personalized_output() {
-    let first = generate_report_request("session-a private evidence", None);
-    let second = generate_report_request("session-b private evidence", None);
+    let first = generate_report_request("session-a private evidence", EDITOR);
+    let second = generate_report_request("session-b private evidence", EDITOR);
     assert_ne!(first, second);
     assert!(first.to_string().contains("session-a private evidence"));
     assert!(!first.to_string().contains("session-b private evidence"));
@@ -1403,7 +1409,7 @@ async fn a_misrecognized_turn_neither_appears_in_nor_decides_the_report() {
         &GeminiKeys::single(&key),
         &model,
         &prompt,
-        None,
+        EDITOR,
         problem,
         "report-probe",
     )
@@ -1972,17 +1978,17 @@ fn report_generation_request_matches_python_report_model_config() {
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-report:generateContent"
     );
 
-    let request = generate_report_request("score this", None);
+    let request = generate_report_request("score this", EDITOR);
     assert_eq!(request["contents"][0]["parts"][0]["text"], "score this");
 
     // The constant half goes first, as the system instruction, so every report
     // call and every repair of one opens on the same prefix.
     assert_eq!(
         request["systemInstruction"]["parts"][0]["text"],
-        crate::agent::report_system_instruction()
+        crate::agent::report_system_instruction(InterviewMode::Coding)
     );
     assert_eq!(
-        generate_report_request("another session", None)["systemInstruction"],
+        generate_report_request("another session", EDITOR)["systemInstruction"],
         request["systemInstruction"]
     );
     assert_eq!(
@@ -1991,16 +1997,42 @@ fn report_generation_request_matches_python_report_model_config() {
         "an editor interview attaches nothing"
     );
 
-    // The board rides the same request as an inline image, because a report is
-    // one `generateContent` call and there is nowhere else for a picture to go.
-    // Before the prompt, which is the order the prompt is written in: it tells
-    // the reviewer to read the board before scoring.
-    let with_board = generate_report_request("score this", Some(&[0xff, 0xd8, 0xff]));
+    // Every phase image rides the same request, preceded by its server-owned
+    // label. The prompt comes last, after all of the evidence it describes.
+    let with_board = generate_report_request(
+        "score this",
+        ReportMaterial {
+            mode: InterviewMode::Whiteboard,
+            boards: &[
+                ("Example checkpoint", &[0xff, 0xd8, 0xff]),
+                ("Final board", &[0xff, 0xd8, 0x00]),
+            ],
+        },
+    );
+
+    // Graded by the whiteboard's rules, which outrank the brief: an editor's
+    // "empty editor caps this below 30" there would fail every board.
     assert_eq!(
-        with_board["contents"][0]["parts"][0]["inlineData"],
+        with_board["systemInstruction"]["parts"][0]["text"],
+        crate::agent::report_system_instruction(InterviewMode::Whiteboard)
+    );
+    assert_eq!(
+        with_board["contents"][0]["parts"][0]["text"],
+        "Example checkpoint:"
+    );
+    assert_eq!(
+        with_board["contents"][0]["parts"][1]["inlineData"],
         json!({ "mimeType": "image/jpeg", "data": "/9j/" })
     );
-    assert_eq!(with_board["contents"][0]["parts"][1]["text"], "score this");
+    assert_eq!(
+        with_board["contents"][0]["parts"][2]["text"],
+        "Final board:"
+    );
+    assert_eq!(
+        with_board["contents"][0]["parts"][3]["inlineData"],
+        json!({ "mimeType": "image/jpeg", "data": "/9gA" })
+    );
+    assert_eq!(with_board["contents"][0]["parts"][4]["text"], "score this");
     assert_eq!(
         with_board["generationConfig"], request["generationConfig"],
         "the attachment changes nothing about how the report is generated"
@@ -2656,7 +2688,7 @@ fn the_interim_review_asks_for_bounded_prose_and_no_thinking() {
     );
 
     // The report's own config still goes through the shared envelope unchanged.
-    let report = generate_report_request("write the debrief", None);
+    let report = generate_report_request("write the debrief", EDITOR);
     assert_eq!(
         report["generationConfig"]["responseMimeType"],
         "application/json"

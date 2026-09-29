@@ -930,8 +930,20 @@ test("a whiteboard recording replays the drawing, not an empty code panel", () =
   });
   const events = [
     stage(BASE, 0),
-    ops(BASE + 1000, stroke([0, 0, 100, 100])),
-    ops(BASE + 5000, stroke([200, 200, 300, 200]), { op: "undo" }),
+    {
+      ...ops(BASE + 1000, stroke([0, 0, 100, 100])),
+      payload: {
+        ops: [stroke([0, 0, 100, 100])],
+        checkpoint: "example",
+      },
+    },
+    {
+      ...ops(BASE + 5000, stroke([200, 200, 300, 200]), { op: "undo" }),
+      payload: {
+        ops: [stroke([200, 200, 300, 200]), { op: "undo" }],
+        checkpoint: "algorithm",
+      },
+    },
     ops(BASE + 9000, stroke([400, 10, 400, 900])),
   ];
   // Cleared first, the way `clearDetail` does between recordings: `render`
@@ -944,6 +956,9 @@ test("a whiteboard recording replays the drawing, not an empty code panel", () =
 
   const buttons = dom.node("replay-timeline").querySelectorAll("[data-moment]");
   assert.equal(buttons.length, 3, "every board event is a moment to open");
+  assert.match(buttons[0].textContent, /Example checkpoint$/);
+  assert.match(buttons[1].textContent, /Approach checkpoint$/);
+  assert.match(buttons[2].textContent, /board$/);
 
   // The board at a moment is the whole journal up to it, replayed. The second
   // moment undoes the stroke it drew, so opening it shows the first stroke
@@ -960,11 +975,18 @@ test("a whiteboard recording replays the drawing, not an empty code panel", () =
       .map(([, x, y]) => [x, y]);
   };
   assert.deepEqual(opened(0), [[0, 0]]);
-  assert.equal(dom.node("replay-moment-label").textContent, "Whiteboard");
+  assert.equal(
+    dom.node("replay-moment-label").textContent,
+    "Example board checkpoint",
+  );
   assert.deepEqual(
     opened(1),
     [[0, 0]],
     "the undone stroke is not on the board",
+  );
+  assert.equal(
+    dom.node("replay-moment-label").textContent,
+    "Approach board checkpoint",
   );
   assert.deepEqual(opened(2), [
     [0, 0],

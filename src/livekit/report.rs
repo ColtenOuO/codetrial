@@ -16,7 +16,7 @@ use crate::agent::{
     framework_evidence_json, interview_contract_json, report_prompt, report_system_instruction,
     rolling_assessment, transcript_for_report,
 };
-use crate::gemini::{GeminiKeys, generate_report_with_keys};
+use crate::gemini::{GeminiKeys, ReportMaterial, generate_report_with_keys};
 use crate::runtime::{RuntimeBootstrap, TOPIC_REPORT};
 
 use super::{REPORT_TIMEOUT, browser_packet};
@@ -45,7 +45,10 @@ pub(super) fn freeze_report_prompt(
     // reads both.
     state.evidence_ledger.record_model_input(
         ModelInputKind::FinalReport,
-        &format!("{}\n\n{prompt}", report_system_instruction()),
+        &format!(
+            "{}\n\n{prompt}",
+            report_system_instruction(boot.interview_mode)
+        ),
     );
     prompt
 }
@@ -53,13 +56,13 @@ pub(super) fn freeze_report_prompt(
 /// The report call under `REPORT_TIMEOUT`. Borrows nothing of the interview
 /// state, which is what lets it run beside the farewell that still needs it.
 ///
-/// `board` is the whiteboard as the candidate left it, and it is the
-/// reviewer's only record of their written work: an editor interview passes
-/// `None` and a whiteboard interview passes it whenever one arrived at all.
+/// `boards` are the whiteboard phase checkpoints and final state. An editor
+/// interview passes an empty slice; a whiteboard interview passes every image
+/// that reached the agent, so clearing between phases does not erase evidence.
 pub(super) async fn generate_report_bounded(
     boot: &RuntimeBootstrap<'_>,
     prompt: &str,
-    board: Option<&[u8]>,
+    boards: &[(&str, &[u8])],
     api_key: &GeminiKeys,
 ) -> GeneratedReport {
     tokio::time::timeout(
@@ -68,7 +71,10 @@ pub(super) async fn generate_report_bounded(
             api_key,
             boot.report_model,
             prompt,
-            board,
+            ReportMaterial {
+                mode: boot.interview_mode,
+                boards,
+            },
             boot.problem,
             boot.room_name,
         ),

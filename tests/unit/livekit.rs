@@ -3276,7 +3276,7 @@ async fn settle(
     result: &crate::agent::DataEventResult,
     reply: &mut Option<String>,
 ) -> HoldEffects {
-    let (mut board, _rx) = board::Board::new();
+    let mut board = board::Board::new();
     let mut context = turn.context(output_audio, gemini, &mut board, media);
     settle_hold(
         &mut context,
@@ -3359,7 +3359,7 @@ async fn repeated_thinking_acknowledges_without_finalizing_resumed_speech() {
     assert_eq!(turn.state.thinking_hold, original_hold);
     let mut reply = result.generate_reply.clone();
     let effects = {
-        let (mut board, _rx) = board::Board::new();
+        let mut board = board::Board::new();
         let mut context = turn.context(&mut output_audio, &mut gemini, &mut board, &mut media);
         settle_hold(
             &mut context,

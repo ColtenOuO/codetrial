@@ -226,7 +226,7 @@ fn the_report_cites_the_surface_the_interview_was_held_on() {
             "the whiteboard report still says {absent:?}"
         );
     }
-    assert!(attached.contains("The image attached to this message"));
+    assert!(attached.contains("The labeled images attached to this message"));
     assert!(attached.contains("NOTHING RAN"));
 
     // The phases keep their names in the schema, so the reviewer is told what
@@ -236,7 +236,7 @@ fn the_report_cites_the_surface_the_interview_was_held_on() {
     // A whiteboard interview with no board must not send the reviewer looking
     // for an attachment that is not there.
     let missing = brief(InterviewMode::Whiteboard, false, "");
-    assert!(!missing.contains("The image attached to this message"));
+    assert!(!missing.contains("The labeled images attached to this message"));
     assert!(missing.contains("no board reached this review"));
 
     // And the editor's report is unchanged by any of it.

@@ -85,6 +85,11 @@ function clamp(value, max) {
 export function createBoard() {
   let strokes = [];
   let undone = [];
+  // Clear is one edit, even though it removes every stroke. Only the newest
+  // clear needs its own snapshot: drawing after it deliberately starts a new
+  // undo branch, just as drawing after an ordinary undo does.
+  let cleared = null;
+  let redoClear = false;
   let open = null;
   /// What has been done to the board since somebody last asked.
   ///
@@ -100,14 +105,16 @@ export function createBoard() {
     /// without the history noticing.
     strokes: () => strokes.slice(),
     strokeCount: () => strokes.length,
-    canUndo: () => strokes.length > 0,
-    canRedo: () => undone.length > 0,
+    canUndo: () => strokes.length > 0 || cleared !== null,
+    canRedo: () => undone.length > 0 || redoClear,
     isDrawing: () => open !== null,
 
     /// Starts a stroke, and returns whether the board took it.
     begin(tool, color, x, y) {
       if (strokes.length >= MAX_STROKES) return false;
       undone = [];
+      cleared = null;
+      redoClear = false;
       open = {
         color: strokeColor(tool, color),
         width: strokeWidth(tool),
@@ -169,6 +176,8 @@ export function createBoard() {
       if (points.length > MAX_POINTS * 2) return false;
       if (!points.every((value) => Number.isFinite(value))) return false;
       undone = [];
+      cleared = null;
+      redoClear = false;
       strokes.push({
         color,
         width,
@@ -180,14 +189,33 @@ export function createBoard() {
     },
 
     undo() {
-      if (open || strokes.length === 0) return false;
+      if (open) return false;
+      if (cleared !== null) {
+        strokes = cleared;
+        cleared = null;
+        redoClear = true;
+        journal.push({ op: "undo" });
+        return true;
+      }
+      if (strokes.length === 0) return false;
+      redoClear = false;
       undone.push(strokes.pop());
       journal.push({ op: "undo" });
       return true;
     },
 
     redo() {
-      if (open || undone.length === 0) return false;
+      if (open) return false;
+      if (redoClear) {
+        cleared = strokes;
+        strokes = [];
+        undone = [];
+        redoClear = false;
+        journal.push({ op: "redo" });
+        return true;
+      }
+      if (undone.length === 0) return false;
+      cleared = null;
       strokes.push(undone.pop());
       journal.push({ op: "redo" });
       return true;
@@ -198,8 +226,10 @@ export function createBoard() {
     /// whiteboard, and without this it is unrecoverable.
     clear() {
       if (open || strokes.length === 0) return false;
-      undone = strokes.slice().reverse();
+      cleared = strokes;
       strokes = [];
+      undone = [];
+      redoClear = false;
       journal.push({ op: "clear" });
       return true;
     },

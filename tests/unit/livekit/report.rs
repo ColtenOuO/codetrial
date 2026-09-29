@@ -726,7 +726,9 @@ fn a_frozen_report_prompt_is_counted_and_a_missed_deadline_still_reports() {
     // Counted with the system instruction the brief goes out behind.
     assert_eq!(
         state.evidence_ledger.metrics.final_report_prompt_bytes,
-        (crate::agent::report_system_instruction().len() + 2 + prompt.len()) as u64
+        (crate::agent::report_system_instruction(crate::agent::InterviewMode::Coding).len()
+            + 2
+            + prompt.len()) as u64
     );
 
     let missed = tokio::runtime::Builder::new_current_thread()
@@ -782,7 +784,7 @@ fn a_whiteboard_report_is_built_from_the_board_and_not_the_editor() {
     // arrived is reported without one.
     assert!(
         report_prompt_text(&boot, &state, 20.0, true)
-            .contains("The image attached to this message")
+            .contains("The labeled images attached to this message")
     );
     let unattached = report_prompt_text(&boot, &state, 20.0, false);
     assert!(unattached.contains("no board reached this review"));

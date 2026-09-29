@@ -202,6 +202,7 @@ fn prompt_samples() -> Value {
     let empty = evidence_projection("empty");
     let early = evidence_projection("early");
     let working = evidence_projection("working");
+    let board_working = evidence_projection("board");
     let working_changed = evidence_projection("workingChanged");
     let working_interim = evidence_projection("workingInterim");
     let working_report = evidence_projection("workingReport");
@@ -306,7 +307,7 @@ fn prompt_samples() -> Value {
         "greeting": greeting(InterviewMode::Coding),
         "boardGreeting": greeting(InterviewMode::Whiteboard),
         "boardSilenceEmpty": board_silence_nudge(&empty, 0),
-        "boardSilenceDrawn": board_silence_nudge(&working, 17),
+        "boardSilenceDrawn": board_silence_nudge(&board_working, 17),
         "boardColdRestart": cold_restart(&RuntimeState {
             interview_mode: InterviewMode::Whiteboard,
             board_snapshots: 4,
@@ -346,14 +347,25 @@ fn prompt_samples() -> Value {
         "wrapComplete": wrap_up("interview_complete", false),
         "interim": interim_review_prompt(&InterimReviewInput {
             problem,
+            interview_mode: InterviewMode::Coding,
             transcript_window: "Candidate: I will use a hash map.",
             code: "seen = {}",
             language: "python",
             already_recorded: "Candidate restated the inputs and the return shape.",
             evidence: &working_interim,
         }),
+        "boardInterim": interim_review_prompt(&InterimReviewInput {
+            problem,
+            interview_mode: InterviewMode::Whiteboard,
+            transcript_window: "Candidate: I will draw the array and walk two pointers inward.",
+            code: "",
+            language: "python",
+            already_recorded: "",
+            evidence: &empty,
+        }),
         "interimEmpty": interim_review_prompt(&InterimReviewInput {
             problem,
+            interview_mode: InterviewMode::Coding,
             transcript_window: "",
             code: "",
             language: "python",
@@ -361,7 +373,8 @@ fn prompt_samples() -> Value {
             evidence: &empty,
         }),
         "interimSystem": interim_system_instruction(),
-        "reportSystem": report_system_instruction(),
+        "reportSystem": report_system_instruction(InterviewMode::Coding),
+        "boardReportSystem": report_system_instruction(InterviewMode::Whiteboard),
         "testsPass": test_results_reaction("3/3 passed", true, TestRecord::Record, None, &RuntimeState::default(), SincePrevious::Other,),
         "testsFail": test_results_reaction(
             &reaction_test_summary,
@@ -725,7 +738,10 @@ fn exact_fixture_keys(value: &Value, expected: &[&str], path: &str) {
 
 /// What the report model reads: the system instruction and the brief.
 fn model_report_input(brief: String) -> String {
-    format!("{}\n\n{brief}", report_system_instruction())
+    format!(
+        "{}\n\n{brief}",
+        report_system_instruction(InterviewMode::Coding)
+    )
 }
 
 /// Puts the interview past its coding round, which is the state the browser's

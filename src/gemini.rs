@@ -699,22 +699,22 @@ pub(crate) async fn check_live_session_at(
 /// inside it retries a call that never produced any. The candidate is waiting,
 /// so both stay small and `REPORT_TIMEOUT` bounds them together.
 ///
-/// `board` is the whiteboard image the report is graded from, and it rides
-/// every call this makes: the repairs resend the prompt, and a repair that
-/// dropped the picture would ask the reviewer to fix a report it can no longer
-/// see the evidence for.
+/// `material.boards` are the phase checkpoints the report is graded from, and
+/// they ride every call this makes: the repairs resend the prompt, and a repair
+/// that dropped the pictures would ask the reviewer to fix a report it can no
+/// longer see the evidence for.
 pub(crate) async fn generate_report_with_keys(
     keys: &GeminiKeys,
     model: &str,
     prompt: &str,
-    board: Option<&[u8]>,
+    material: ReportMaterial<'_>,
     problem: &crate::agent::Problem,
     scope: &str,
 ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
     let mut calls = ReportCalls {
         keys,
         url: gemini_generate_content_url(model),
-        board,
+        material,
         budget: ReportCallBudget::new(),
         scope,
     };
@@ -734,10 +734,20 @@ trait ReportTransport {
     ) -> impl Future<Output = Result<String, Box<dyn std::error::Error + Send + Sync>>> + Send;
 }
 
+/// What a report call grades besides its prompt: the surface the interview was
+/// held at, which picks the rules the reviewer scores by, and what was drawn
+/// on it. Together because every call in the chain needs both, and a repair
+/// that resent one without the other would grade a board by an editor's rules.
+#[derive(Clone, Copy)]
+pub(crate) struct ReportMaterial<'a> {
+    pub mode: InterviewMode,
+    pub boards: &'a [(&'a str, &'a [u8])],
+}
+
 struct ReportCalls<'a> {
     keys: &'a GeminiKeys,
     url: String,
-    board: Option<&'a [u8]>,
+    material: ReportMaterial<'a>,
     budget: ReportCallBudget,
     scope: &'a str,
 }
@@ -751,7 +761,7 @@ impl ReportTransport for ReportCalls<'_> {
             self.keys,
             &self.url,
             prompt,
-            self.board,
+            self.material,
             &mut self.budget,
             REPORT_RETRY_BACKOFF,
             self.scope,
@@ -927,7 +937,7 @@ async fn generate_report_transport(
     keys: &GeminiKeys,
     url: &str,
     prompt: &str,
-    board: Option<&[u8]>,
+    material: ReportMaterial<'_>,
     budget: &mut ReportCallBudget,
     first_backoff: Duration,
     scope: &str,
@@ -940,7 +950,7 @@ async fn generate_report_transport(
     loop {
         let call = budget.spend()?;
         let what = http_usage_label("report", scope, call, failures);
-        let error = match generate_report_once(&api_key, url, prompt, board, &what).await {
+        let error = match generate_report_once(&api_key, url, prompt, material, &what).await {
             Ok(report) => return Ok(report),
             Err(error) => error,
         };
@@ -1203,13 +1213,13 @@ async fn generate_report_once(
     api_key: &str,
     url: &str,
     prompt: &str,
-    board: Option<&[u8]>,
+    material: ReportMaterial<'_>,
     what: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     generate_content_once(
         api_key,
         url,
-        &generate_report_request(prompt, board),
+        &generate_report_request(prompt, material),
         REPORT_ATTEMPT_TIMEOUT,
         what,
     )
@@ -1445,6 +1455,21 @@ pub fn live_tool_declarations(
             }
         })
     };
+
+    // Each surface's tools name only the work that surface has: a hint fitted
+    // to an editor, or evidence found on a test run, sends a whiteboard
+    // interviewer looking for something that does not exist.
+    let (hint_description, evidence_description) = if mode.is_whiteboard() {
+        (
+            "Record a hint: requested true before one they asked for, then give the clue it returns, fitted to their board, which it puts in front of you again; requested false after any other.",
+            "Record REACTO or STAR evidence present in their speech or on their board.",
+        )
+    } else {
+        (
+            "Record a hint: requested true before one they asked for, then give the clue it returns with their editor; requested false after any other.",
+            "Record REACTO or STAR evidence present in their speech, an editor snapshot or a test event.",
+        )
+    };
     let evidence_sources = if mode.is_whiteboard() {
         json!(["candidate_speech", "board_snapshot", "session_timing"])
     } else {
@@ -1459,7 +1484,7 @@ pub fn live_tool_declarations(
         read_tool,
         json!({
             "name": TOOL_LOG_HINT,
-            "description": "Record a hint: requested true before one they asked for, then give the clue it returns with their editor; requested false after any other.",
+            "description": hint_description,
             "parameters": {
                 "type": "OBJECT",
                 "properties": {
@@ -1470,7 +1495,7 @@ pub fn live_tool_declarations(
         }),
         json!({
             "name": TOOL_RECORD_FRAMEWORK_EVIDENCE,
-            "description": "Record REACTO or STAR evidence present in their speech or on their editor, test run or board.",
+            "description": evidence_description,
 
             // Schema.Type is an enum, so these are its value names, not free
             // text. Lowercase happens to be accepted here and is rejected on
@@ -1747,11 +1772,11 @@ fn tool_response_message(answers: &[(GeminiFunctionCall, Value)]) -> Value {
     })
 }
 
-fn generate_report_request(prompt: &str, board: Option<&[u8]>) -> Value {
-    content_request(
-        &crate::agent::report_system_instruction(),
+fn generate_report_request(prompt: &str, material: ReportMaterial<'_>) -> Value {
+    let mut request = content_request(
+        &crate::agent::report_system_instruction(material.mode),
         prompt,
-        board,
+        None,
         json!({
             "responseMimeType": "application/json",
             "responseSchema": crate::agent::report_response_schema(),
@@ -1771,7 +1796,24 @@ fn generate_report_request(prompt: &str, board: Option<&[u8]>) -> Value {
             "temperature": 0.3,
             "seed": GENERATION_SEED
         }),
-    )
+    );
+    let parts = request["contents"][0]["parts"]
+        .as_array_mut()
+        .expect("content_request always builds an array of parts");
+    let prompt = parts
+        .pop()
+        .expect("content_request always appends the prompt");
+    for (label, image) in material.boards {
+        parts.push(json!({ "text": format!("{label}:") }));
+        parts.push(json!({
+            "inlineData": {
+                "mimeType": GEMINI_IMAGE_MIME_TYPE,
+                "data": STANDARD.encode(image)
+            }
+        }));
+    }
+    parts.push(prompt);
+    request
 }
 
 async fn wait_for_setup_complete(

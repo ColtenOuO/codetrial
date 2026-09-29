@@ -16,12 +16,14 @@
 //! `resend` is what answers.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ::livekit::data_stream::api::StreamReader;
 use ::livekit::prelude::RoomEvent;
 use futures_util::{Stream, StreamExt};
-use tokio::sync::mpsc::{Receiver, Sender, channel, error::TrySendError};
+use tokio::sync::Semaphore;
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 
 use crate::agent::{InterviewMode, RuntimeState};
 use crate::gemini::GeminiLiveSession;
@@ -47,11 +49,31 @@ const BOARD_SEND_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Boards that may be waiting for the room loop at once.
 ///
-/// Small, because a board is the whole state of the drawing rather than a
-/// change to it: when two are queued the older one is worth nothing, and the
-/// interviewer is better served by the newest board a moment later than by
-/// both of them in order.
+/// Small, because each one may weigh `MAX_BOARD_BYTES` and a board is the
+/// whole state of the drawing rather than a change to it: the loop records
+/// every one in the order it was read and only the newest is shown, so a
+/// longer queue would only be more memory spent on boards about to be replaced.
 const BOARD_QUEUE: usize = 2;
+
+/// Board streams this process reads at once.
+///
+/// The browser sends one at a time, so two is one more than it ever uses. A
+/// reader holds up to `MAX_BOARD_BYTES` while it drains and then waits for room
+/// in the queue rather than dropping its board, so without a cap a client that
+/// is not the browser could open streams until the agent ran out of memory.
+/// With it, what boards can hold is this many in flight plus `BOARD_QUEUE`
+/// waiting, and a stream past the cap is refused before any of it is read.
+const MAX_BOARD_READERS: usize = 2;
+
+/// The longest the report waits for boards still on their way when the
+/// interview ends.
+///
+/// The browser puts the final board on the wire just before it sends
+/// `end_interview`, and the two travel separately: the end can arrive while the
+/// board is still being read, or read and queued behind it. A report frozen at
+/// that moment would grade the board before the candidate's last work. Bounded,
+/// because a stream that stalls must not hold the report hostage.
+const BOARD_FINAL_WAIT: Duration = Duration::from_secs(2);
 
 /// One board as it left the browser.
 pub(super) struct BoardSnapshot {
@@ -61,26 +83,51 @@ pub(super) struct BoardSnapshot {
     /// contents, and used the same way: to say how much is there, never to
     /// decide whether it is any good.
     strokes: u32,
+    /// The REACTO phase whose completion caused this snapshot, when it is a
+    /// checkpoint rather than the ordinary settled board sent to Jim.
+    checkpoint: Option<&'static str>,
+}
+
+/// One image handed to the report model, with the words that precede it in the
+/// multimodal request.
+pub(super) struct ReportBoard {
+    pub(super) label: &'static str,
+    pub(super) bytes: Vec<u8>,
 }
 
 /// The latest board, and when one last went out.
 pub(super) struct Board {
     latest: Option<Vec<u8>>,
+    /// Whether `latest` is newer than the last board Gemini was shown. Set by
+    /// every board that arrives and cleared by every send, so a board the
+    /// interval held back is still owed and goes out once it lapses.
+    unsent: bool,
+    /// At most one image per coding phase. Kept beside the socket rather than
+    /// in `RuntimeState` for the same reason as `latest`: these JPEGs are not
+    /// cloned with the interview state and nothing else needs to mutate them.
+    checkpoints: Vec<(&'static str, Vec<u8>)>,
     last_sent: Option<Instant>,
     tx: Sender<BoardSnapshot>,
+    /// Finished boards, in the order their readers finished. Held here rather
+    /// than by the room loop so the ending can take what is still queued
+    /// before the report is frozen; see `settle_for_report`.
+    pub(super) rx: Receiver<BoardSnapshot>,
+    /// One permit per stream being read; see `MAX_BOARD_READERS`.
+    readers: Arc<Semaphore>,
 }
 
 impl Board {
-    pub(super) fn new() -> (Self, Receiver<BoardSnapshot>) {
+    pub(super) fn new() -> Self {
         let (tx, rx) = channel(BOARD_QUEUE);
-        (
-            Self {
-                latest: None,
-                last_sent: None,
-                tx,
-            },
+        Self {
+            latest: None,
+            unsent: false,
+            checkpoints: Vec::new(),
+            last_sent: None,
+            tx,
             rx,
-        )
+            readers: Arc::new(Semaphore::new(MAX_BOARD_READERS)),
+        }
     }
 
     /// The end the reader tasks write finished boards to.
@@ -88,12 +135,61 @@ impl Board {
         self.tx.clone()
     }
 
-    /// The board as the candidate last left it, for the reviewer who has to
-    /// grade it. `None` until one arrives, which is a candidate who drew
-    /// nothing or a stream that never completed, and the report prompt says
-    /// which of those it is looking at.
-    pub(super) fn latest(&self) -> Option<&[u8]> {
-        self.latest.as_deref()
+    /// Records every board still on its way, for a report about to be frozen.
+    ///
+    /// Waits for streams still being read as well as for boards already
+    /// queued, and at most `BOARD_FINAL_WAIT`. Readers are done when every
+    /// permit is back; a reader waiting on a full queue holds its permit, so
+    /// the queue is drained while waiting rather than after.
+    pub(super) async fn settle_for_report(&mut self, state: &mut RuntimeState) {
+        let deadline = tokio::time::Instant::now() + BOARD_FINAL_WAIT;
+        let mut arrived = Vec::new();
+        loop {
+            tokio::select! {
+                biased;
+                Some(snapshot) = self.rx.recv() => arrived.push(snapshot),
+                idle = self.readers.acquire_many(MAX_BOARD_READERS as u32) => {
+                    drop(idle);
+                    while let Ok(snapshot) = self.rx.try_recv() {
+                        arrived.push(snapshot);
+                    }
+                    break;
+                }
+                () = tokio::time::sleep_until(deadline) => break,
+            }
+        }
+        for snapshot in arrived {
+            record(self, state, snapshot);
+        }
+    }
+
+    /// Phase checkpoints in REACTO order, plus the final board when it differs
+    /// from the last checkpoint.
+    ///
+    /// Copied only when the report begins, because the farewell keeps using the
+    /// live board and the report runs beside it. Six ordinary JPEGs are still
+    /// well below the memory bound the byte-stream ceiling establishes.
+    pub(super) fn report_boards(&self) -> Vec<ReportBoard> {
+        let mut images = self
+            .checkpoints
+            .iter()
+            .map(|(label, bytes)| ReportBoard {
+                label,
+                bytes: bytes.clone(),
+            })
+            .collect::<Vec<_>>();
+        if let Some(latest) = self.latest.as_ref()
+            && self
+                .checkpoints
+                .last()
+                .is_none_or(|(_, checkpoint)| checkpoint != latest)
+        {
+            images.push(ReportBoard {
+                label: "Final board",
+                bytes: latest.clone(),
+            });
+        }
+        images
     }
 }
 
@@ -141,6 +237,24 @@ pub(super) fn strokes_from_attributes(attributes: &HashMap<String, String>) -> u
         .unwrap_or(0)
 }
 
+/// A browser-provided phase id, reduced to the six values a whiteboard report
+/// understands and to the candidate-facing label the request will put beside
+/// its image. Unknown values make an ordinary board, never an attachment with
+/// attacker-chosen instructions for the reviewer.
+pub(super) fn checkpoint_from_attributes(
+    attributes: &HashMap<String, String>,
+) -> Option<&'static str> {
+    match attributes.get("checkpoint").map(String::as_str) {
+        Some("repeat") => Some("Repeat checkpoint"),
+        Some("example") => Some("Example checkpoint"),
+        Some("algorithm") => Some("Approach checkpoint"),
+        Some("coding") => Some("Trace checkpoint"),
+        Some("test") => Some("Edge cases checkpoint"),
+        Some("optimizations") => Some("Complexity checkpoint"),
+        _ => None,
+    }
+}
+
 /// Takes a `ByteStreamOpened` event off the room and starts draining it.
 ///
 /// Returns whether the event was this module's, so the room loop can pass
@@ -183,8 +297,17 @@ pub(super) fn handle_board_event(
         eprintln!("ignoring a board stream: {refusal}");
         return true;
     }
+    let Ok(permit) = Arc::clone(&board.readers).try_acquire_owned() else {
+        eprintln!("ignoring a board stream: {MAX_BOARD_READERS} are already being read");
+        return true;
+    };
     let strokes = strokes_from_attributes(&reader.info().attributes());
-    tokio::spawn(drain(reader, strokes, board.sender()));
+    let checkpoint = checkpoint_from_attributes(&reader.info().attributes());
+    let tx = board.sender();
+    tokio::spawn(async move {
+        drain(reader, strokes, checkpoint, tx).await;
+        drop(permit);
+    });
     true
 }
 
@@ -200,6 +323,7 @@ pub(super) fn handle_board_event(
 async fn drain<C, E>(
     mut chunks: impl Stream<Item = Result<C, E>> + Unpin,
     strokes: u32,
+    checkpoint: Option<&'static str>,
     tx: Sender<BoardSnapshot>,
 ) where
     C: AsRef<[u8]>,
@@ -229,36 +353,64 @@ async fn drain<C, E>(
     if bytes.is_empty() {
         return;
     }
-    if let Err(TrySendError::Full(_)) = tx.try_send(BoardSnapshot { bytes, strokes }) {
-        // The loop is behind and two boards are already waiting, so this one
-        // would be shown after both of them were already stale. See
-        // `BOARD_QUEUE`.
-        eprintln!("dropping a board the room loop has not caught up with");
-    }
+    let snapshot = BoardSnapshot {
+        bytes,
+        strokes,
+        checkpoint,
+    };
+
+    // Every board waits for room rather than being dropped. Dropping the one
+    // that found the queue full threw away the newest and kept the older ones,
+    // and a candidate who then stopped drawing left the interviewer on a stale
+    // board for good. Waiting keeps them in the order they were read, so the
+    // newest is the last the loop records. What it costs is bounded by
+    // `MAX_BOARD_READERS`, and the room loop stays free because this is the
+    // spawned drain task.
+    let _ = tx.send(snapshot).await;
 }
 
-/// Shows Gemini a board that just arrived, and records that it did.
+/// Takes in a board that just arrived: its counts, its checkpoint, and the
+/// image `read_board` and the next send will use. Sends nothing, so a paused
+/// interview and an ending one can keep a board without showing it.
 ///
-/// The counts land in the interview state whether or not the socket takes the
-/// image, because they are what the candidate drew; the image is what this
-/// call can fail to deliver.
-pub(super) async fn pump_board(
-    board: &mut Board,
-    gemini: &mut GeminiLiveSession,
-    state: &mut RuntimeState,
-    snapshot: BoardSnapshot,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let now = Instant::now();
+/// The counts land in the interview state whether or not the image ever
+/// reaches the socket, because they are what the candidate drew.
+pub(super) fn record(board: &mut Board, state: &mut RuntimeState, snapshot: BoardSnapshot) {
     state.board_snapshots = state.board_snapshots.saturating_add(1);
     state.board_strokes = snapshot.strokes;
     state.last_board_at_ms = Some(crate::agent::elapsed_ms(state));
 
-    // Held before the interval is weighed, so a board that is too soon to send
-    // is still the one `read_board` answers with. Dropping it here would mean
-    // asking for the board during a busy stretch of drawing returns the one
-    // before it.
+    // Held whether or not it can go out yet, so a board that is too soon to
+    // send is still the one `read_board` answers with. Dropping it here would
+    // mean asking for the board during a busy stretch of drawing returns the
+    // one before it.
+    if let Some(label) = snapshot.checkpoint {
+        if let Some((_, bytes)) = board
+            .checkpoints
+            .iter_mut()
+            .find(|(stored, _)| *stored == label)
+        {
+            *bytes = snapshot.bytes.clone();
+        } else {
+            board.checkpoints.push((label, snapshot.bytes.clone()));
+        }
+    }
     board.latest = Some(snapshot.bytes);
-    if too_soon(board.last_sent, now) {
+    board.unsent = true;
+}
+
+/// Shows Gemini the newest board if it has not seen it and the interval allows.
+///
+/// Called for every board that arrives and on every watch tick. The tick is
+/// what makes a board the interval held back go out once it lapses, rather
+/// than waiting for the candidate's next stroke, which a candidate who has
+/// stopped drawing to explain never makes.
+pub(super) async fn send_if_due(
+    board: &mut Board,
+    gemini: &mut GeminiLiveSession,
+    now: Instant,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if !board.unsent || too_soon(board.last_sent, now) {
         return Ok(());
     }
     send(board, gemini, now).await
@@ -297,7 +449,13 @@ async fn send(
     board.last_sent = Some(now);
     gemini
         .send_video_frame(bytes, crate::gemini::GEMINI_IMAGE_MIME_TYPE)
-        .await
+        .await?;
+
+    // Only once the socket took it. A failed write leaves the board owed, so
+    // the next tick tries again rather than leaving the interviewer on the one
+    // before it; `last_sent` is set either way, which spaces those tries out.
+    board.unsent = false;
+    Ok(())
 }
 
 #[cfg(test)]

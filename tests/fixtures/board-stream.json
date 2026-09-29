@@ -14,14 +14,15 @@
       }
     },
     {
-      "name": "a dense diagram",
+      "name": "an approach checkpoint",
       "options": {
         "topic": "board_image",
         "name": "board-17.jpg",
         "mimeType": "image/jpeg",
         "totalSize": 96318,
         "attributes": {
-          "strokes": "214"
+          "strokes": "214",
+          "checkpoint": "algorithm"
         }
       }
     },
