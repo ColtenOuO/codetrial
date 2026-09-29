@@ -283,8 +283,16 @@ async fn report_transport_fixture(
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-    let result =
-        generate_report_transport(&keys, &url, "prompt", &mut budget, backoff, "test-room").await;
+    let result = generate_report_transport(
+        &keys,
+        &url,
+        "prompt",
+        None,
+        &mut budget,
+        backoff,
+        "test-room",
+    )
+    .await;
     server.abort();
     let seen = requests.lock().unwrap().clone();
     (result, seen, budget.remaining)
@@ -391,6 +399,7 @@ async fn a_key_ruled_out_during_the_backoff_is_not_retried() {
         &keys,
         &url,
         "prompt",
+        None,
         &mut budget,
         REPORT_RETRY_BACKOFF,
         "test-room",
@@ -918,8 +927,8 @@ fn report_retry_backoff_doubles_from_the_first_wait() {
 
 #[test]
 fn report_requests_are_session_local_and_never_reuse_personalized_output() {
-    let first = generate_report_request("session-a private evidence");
-    let second = generate_report_request("session-b private evidence");
+    let first = generate_report_request("session-a private evidence", None);
+    let second = generate_report_request("session-b private evidence", None);
     assert_ne!(first, second);
     assert!(first.to_string().contains("session-a private evidence"));
     assert!(!first.to_string().contains("session-b private evidence"));
@@ -1361,6 +1370,8 @@ async fn a_misrecognized_turn_neither_appears_in_nor_decides_the_report() {
     let final_code = "class Solution:\n    def matchDisputedCharge(self, nums: list[int], target: int) -> list[int]:\n        seen = {}\n        for i, amount in enumerate(nums):\n            if target - amount in seen:\n                return [seen[target - amount], i]\n            seen[amount] = i\n        return []\n";
     let prompt = crate::agent::report_prompt(crate::agent::ReportPromptInput {
         problem,
+        interview_mode: InterviewMode::Coding,
+        board_attached: false,
         transcript: &transcript,
         rolling_assessment: "",
         final_code,
@@ -1392,6 +1403,7 @@ async fn a_misrecognized_turn_neither_appears_in_nor_decides_the_report() {
         &GeminiKeys::single(&key),
         &model,
         &prompt,
+        None,
         problem,
         "report-probe",
     )
@@ -1960,7 +1972,7 @@ fn report_generation_request_matches_python_report_model_config() {
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-report:generateContent"
     );
 
-    let request = generate_report_request("score this");
+    let request = generate_report_request("score this", None);
     assert_eq!(request["contents"][0]["parts"][0]["text"], "score this");
 
     // The constant half goes first, as the system instruction, so every report
@@ -1970,8 +1982,28 @@ fn report_generation_request_matches_python_report_model_config() {
         crate::agent::report_system_instruction()
     );
     assert_eq!(
-        generate_report_request("another session")["systemInstruction"],
+        generate_report_request("another session", None)["systemInstruction"],
         request["systemInstruction"]
+    );
+    assert_eq!(
+        request["contents"][0]["parts"].as_array().map(Vec::len),
+        Some(1),
+        "an editor interview attaches nothing"
+    );
+
+    // The board rides the same request as an inline image, because a report is
+    // one `generateContent` call and there is nowhere else for a picture to go.
+    // Before the prompt, which is the order the prompt is written in: it tells
+    // the reviewer to read the board before scoring.
+    let with_board = generate_report_request("score this", Some(&[0xff, 0xd8, 0xff]));
+    assert_eq!(
+        with_board["contents"][0]["parts"][0]["inlineData"],
+        json!({ "mimeType": "image/jpeg", "data": "/9j/" })
+    );
+    assert_eq!(with_board["contents"][0]["parts"][1]["text"], "score this");
+    assert_eq!(
+        with_board["generationConfig"], request["generationConfig"],
+        "the attachment changes nothing about how the report is generated"
     );
     assert_eq!(
         request["generationConfig"]["responseMimeType"],
@@ -2605,6 +2637,7 @@ fn the_interim_review_asks_for_bounded_prose_and_no_thinking() {
     let request = content_request(
         &crate::agent::interim_system_instruction(),
         "read this stretch",
+        None,
         interim_generation_config(),
     );
     let config = &request["generationConfig"];
@@ -2623,7 +2656,7 @@ fn the_interim_review_asks_for_bounded_prose_and_no_thinking() {
     );
 
     // The report's own config still goes through the shared envelope unchanged.
-    let report = generate_report_request("write the debrief");
+    let report = generate_report_request("write the debrief", None);
     assert_eq!(
         report["generationConfig"]["responseMimeType"],
         "application/json"

@@ -184,3 +184,69 @@ fn a_board_reports_its_own_age_and_an_empty_one_says_so() {
     state.last_board_at_ms = Some(elapsed_ms(&state) + 5_000);
     assert_eq!(board_age_seconds(&state), Some(0));
 }
+
+/// The reviewer of a whiteboard interview is pointed at the board and at
+/// nothing that does not exist.
+///
+/// The editor half is asserted in the same test for the reason the live prompt
+/// is: the two are one function with a branch in it, and the failure this
+/// catches is an edit to one arm that was meant for both.
+#[test]
+fn the_report_cites_the_surface_the_interview_was_held_on() {
+    let problem = get_problem(Some("two-sum"));
+    let brief = |interview_mode, board_attached, final_code| {
+        report_prompt(ReportPromptInput {
+            problem,
+            interview_mode,
+            board_attached,
+            transcript: "Candidate: here is the map I am keeping.",
+            rolling_assessment: "",
+            final_code,
+            language: "python",
+            hints_used: 0,
+            hint_rung: 0,
+            volunteered_hints: 0,
+            duration_min: 45,
+            elapsed_min: 20.0,
+            test_summary: "",
+            practice_level: None,
+            evidence: "",
+        })
+    };
+
+    let attached = brief(InterviewMode::Whiteboard, true, "");
+    for absent in [
+        "UNTRUSTED EDITOR",
+        "TEST-CASE EXECUTION",
+        "Contract the tests grade",
+        "the candidate saying",
+    ] {
+        assert!(
+            !attached.contains(absent),
+            "the whiteboard report still says {absent:?}"
+        );
+    }
+    assert!(attached.contains("The image attached to this message"));
+    assert!(attached.contains("NOTHING RAN"));
+
+    // The phases keep their names in the schema, so the reviewer is told what
+    // those names meant at a board rather than being given new ones.
+    assert!(attached.contains("Coding is the trace they walked"));
+
+    // A whiteboard interview with no board must not send the reviewer looking
+    // for an attachment that is not there.
+    let missing = brief(InterviewMode::Whiteboard, false, "");
+    assert!(!missing.contains("The image attached to this message"));
+    assert!(missing.contains("no board reached this review"));
+
+    // And the editor's report is unchanged by any of it.
+    let editor = brief(InterviewMode::Coding, false, "seen = {}");
+    assert!(editor.contains("BEGIN UNTRUSTED EDITOR (python)"));
+    assert!(editor.contains("TEST-CASE EXECUTION"));
+    for absent in ["board", "NOTHING RAN"] {
+        assert!(
+            !editor.contains(absent),
+            "the editor report has gained {absent:?}"
+        );
+    }
+}

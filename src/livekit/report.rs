@@ -29,12 +29,17 @@ pub(super) type GeneratedReport = Result<
 
 /// The report prompt, built and counted once the interview's assessment is
 /// over and before the farewell is spoken, so the call can run while it plays.
+///
+/// `board_attached` is whether a whiteboard image goes with it, which the
+/// prompt has to know: told to grade a board that never arrived, the reviewer
+/// goes looking for an attachment that is not there.
 pub(super) fn freeze_report_prompt(
     boot: &RuntimeBootstrap<'_>,
     state: &mut RuntimeState,
     elapsed_min: f64,
+    board_attached: bool,
 ) -> String {
-    let prompt = report_prompt_text(boot, state, elapsed_min);
+    let prompt = report_prompt_text(boot, state, elapsed_min, board_attached);
 
     // Counted with the system instruction it goes out behind, since the model
     // reads both.
@@ -47,9 +52,14 @@ pub(super) fn freeze_report_prompt(
 
 /// The report call under `REPORT_TIMEOUT`. Borrows nothing of the interview
 /// state, which is what lets it run beside the farewell that still needs it.
+///
+/// `board` is the whiteboard as the candidate left it, and it is the
+/// reviewer's only record of their written work: an editor interview passes
+/// `None` and a whiteboard interview passes it whenever one arrived at all.
 pub(super) async fn generate_report_bounded(
     boot: &RuntimeBootstrap<'_>,
     prompt: &str,
+    board: Option<&[u8]>,
     api_key: &GeminiKeys,
 ) -> GeneratedReport {
     tokio::time::timeout(
@@ -58,6 +68,7 @@ pub(super) async fn generate_report_bounded(
             api_key,
             boot.report_model,
             prompt,
+            board,
             boot.problem,
             boot.room_name,
         ),
@@ -261,6 +272,16 @@ fn report_with_integrity_events(
             serde_json::json!(state.interview_loop.as_str()),
         );
 
+        // Which surface it was held on, beside the loop it was held in. The
+        // card and the export both say it, and the saved report is the only
+        // record of it once the room is gone: a whiteboard session otherwise
+        // reads afterwards as an editor interview whose candidate typed
+        // nothing.
+        object.insert(
+            "interviewMode".to_string(),
+            serde_json::json!(state.interview_mode.as_str()),
+        );
+
         // Why the interview ended, from the side that ended it. The page can
         // see that a report arrived unasked but not which clock produced it,
         // and it was deriving the answer from its own countdown: an interview
@@ -289,6 +310,7 @@ fn report_prompt_text(
     boot: &RuntimeBootstrap<'_>,
     state: &RuntimeState,
     elapsed_min: f64,
+    board_attached: bool,
 ) -> String {
     let rolling = rolling_assessment(&state.framework_evidence, &state.interim_notes);
 
@@ -307,6 +329,8 @@ fn report_prompt_text(
     let test_summary = format_test_run(state.last_test_run.as_ref(), state.test_runs);
     report_prompt(ReportPromptInput {
         problem: boot.problem,
+        interview_mode: boot.interview_mode,
+        board_attached,
         transcript: &transcript,
         rolling_assessment: &rolling,
         final_code: &state.code,

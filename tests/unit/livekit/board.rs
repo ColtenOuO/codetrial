@@ -161,6 +161,14 @@ fn a_board_with_no_usable_count_still_arrives() {
     );
 }
 
+#[test]
+fn the_latest_board_is_the_one_the_report_is_handed() {
+    let (mut board, _rx) = Board::new();
+    assert_eq!(board.latest(), None);
+    board.latest = Some(vec![0xff, 0xd8, 0x07]);
+    assert_eq!(board.latest(), Some(&[0xff, 0xd8, 0x07][..]));
+}
+
 /// The floor between two boards, at its edge: a whole interval since the last
 /// one is not too soon, and a millisecond short of it is.
 #[test]

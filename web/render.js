@@ -10,6 +10,7 @@ import {
   loopLabel,
   modeLabel,
   orPlaceholder,
+  surfaceLabel,
 } from "./lib.js";
 
 export function runnerStatusMarkup(status) {
@@ -209,6 +210,7 @@ export function reportMarkup({
   problemTitle,
   language,
   code,
+  board,
   saveResult,
 }) {
   const hire = report.decision === "HIRE";
@@ -273,6 +275,9 @@ export function reportMarkup({
   const loop = report.interviewLoop
     ? ` · ${loopLabel(report.interviewLoop)}`
     : "";
+  const surface = report.interviewMode
+    ? ` · ${surfaceLabel(report.interviewMode)}`
+    : "";
   const rounds = report.rounds?.length
     ? `<section><h3>Interview rounds</h3><ul>${report.rounds.map((round) => `<li>${escapeHtml(round.kind)} · ${escapeHtml(round.budgetMin)} min · ${escapeHtml(round.status)}</li>`).join("")}</ul></section>`
     : "";
@@ -287,7 +292,7 @@ export function reportMarkup({
   return `
     <div class="report-card">
       <div class="report-header">
-        <div><p>${report.mode ? `${modeLabel(report.mode)} ` : ""}interview report${loop} · ${escapeHtml(problemTitle)}</p><p class="muted small">${escapeHtml(contract)}</p>${practiceLevel ? `<p class="muted small">${practiceLevel}</p>` : ""}<h2>${heading}</h2></div>
+        <div><p>${report.mode ? `${modeLabel(report.mode)} ` : ""}interview report${loop}${surface} · ${escapeHtml(problemTitle)}</p><p class="muted small">${escapeHtml(contract)}</p>${practiceLevel ? `<p class="muted small">${practiceLevel}</p>` : ""}<h2>${heading}</h2></div>
         ${badge}
       </div>${scores}
       <section><h3>${report.incomplete ? "What happened" : "Committee summary"}</h3><p>${escapeHtml(report.summary)}</p></section>
@@ -298,11 +303,54 @@ export function reportMarkup({
       ${phaseScores}
       ${frameworkTimeline}
       ${integrityEvidenceMarkup(report)}
-      <details><summary>Your final code (${escapeHtml(language)})</summary><pre>${escapeHtml(code.trimEnd() || "(editor was empty)")}</pre></details>
+      ${finalWorkMarkup(language, code, board)}
       ${saveStatus ? `<p id="report-save-status" class="${saveStatus.className}" role="status">${saveStatus.message}</p>` : ""}
       <div class="report-actions"><button id="download-report" type="button">Download report (.md)</button><button id="done" type="button"${saveResult === null ? " disabled" : ""}>Done - back to lobby</button></div>
     </div>
   `;
+}
+
+/// The work the candidate is shown back: their code, or the board they drew it
+/// on.
+///
+/// A whiteboard interview has no editor, so the code block would be the words
+/// "(editor was empty)" under a heading naming a language nobody chose. The
+/// board arrives as a data URL rendered from the page's own canvas rather than
+/// from anything a server sent, and it is checked all the same: this is the
+/// one `src` in the card, and the shape below is the only thing that may go
+/// in it.
+function finalWorkMarkup(language, code, board) {
+  if (board === undefined) {
+    return `<details><summary>Your final code (${escapeHtml(language)})</summary><pre>${escapeHtml(code.trimEnd() || "(editor was empty)")}</pre></details>`;
+  }
+  const drawn =
+    typeof board === "string" &&
+    /^data:image\/(?:jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(board);
+  return drawn
+    ? `<details open><summary>Your final board</summary><img class="report-board" src="${board}" alt="The whiteboard as you left it"></details>`
+    : `<details><summary>Your final board</summary><p class="muted small">The board could not be read back.</p></details>`;
+}
+
+/// The work section of the exported document.
+///
+/// The board is not in it. A markdown file with a hundred kilobytes of base64
+/// in the middle is a file nothing renders and no reader can scroll past, and
+/// the picture is already on the report card and in the recording; a line
+/// saying where it is beats one saying the editor was empty.
+function finalWorkMarkdown({ languageLabel, code, board, fence, info, body }) {
+  if (board !== undefined) {
+    return [
+      "## Final board",
+      "",
+      "You worked this one at the whiteboard. The board as you left it is on the report card, and the recording replays it stroke by stroke.",
+      "",
+    ];
+  }
+  return [
+    `## Final code (${languageLabel})`,
+    ...(code == null ? [body] : [fence + info, body, fence]),
+    "",
+  ];
 }
 
 /// The downloadable report. Pure so the export can be tested without a DOM;
@@ -312,6 +360,7 @@ export function reportMarkdown({
   problemTitle,
   language,
   code,
+  board,
   transcript,
   at,
 }) {
@@ -530,6 +579,9 @@ export function reportMarkdown({
     ...(report.interviewLoop
       ? [`Loop: ${loopLabel(report.interviewLoop)}`]
       : []),
+    ...(report.interviewMode
+      ? [`Held at: ${surfaceLabel(report.interviewMode)}`]
+      : []),
     report.interviewContract
       ? `Contract: bundle ${report.interviewContract.bundleVersion}; live prompt ${report.interviewContract.livePromptVersion}; report prompt ${report.interviewContract.reportPromptVersion}; rubric ${report.interviewContract.rubricVersion}; report schema ${report.interviewContract.reportSchemaVersion}`
       : "Contract: legacy/unversioned",
@@ -559,9 +611,14 @@ export function reportMarkdown({
     "",
     chainNote,
     "",
-    `## Final code (${mdText(language ?? "not recorded")})`,
-    ...(code == null ? [body] : [fence + info, body, fence]),
-    "",
+    ...finalWorkMarkdown({
+      languageLabel: mdText(language ?? "not recorded"),
+      code,
+      board,
+      fence,
+      info,
+      body,
+    }),
     "## Conversation transcript",
     conversation || "(no speech captured)",
     "",

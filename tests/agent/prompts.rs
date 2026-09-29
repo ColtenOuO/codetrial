@@ -53,8 +53,8 @@ fn prompt_golden_digest_matches_versions() {
     // its hash is a string nothing checks. The pair is still asserted, because
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
-    let recorded_versions = (19, 15);
-    let recorded_digest = "6c1b4623108d38952d52c38b2450ceb04a923b66720b043c3e64602d197ca80f";
+    let recorded_versions = (19, 16);
+    let recorded_digest = "a53b1458c13f4e5c8d636f2b99d011942aa3f473d37e27f43d3b30926dafda63";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -266,6 +266,8 @@ fn interview_prompt_pins_reacto_star_and_safety_boundaries() {
 fn report_brief_states_the_hint_rung() {
     let prompt = report_prompt(ReportPromptInput {
         problem: get_problem(Some("two-sum")),
+        interview_mode: InterviewMode::Coding,
+        board_attached: false,
         transcript: "",
         rolling_assessment: "",
         final_code: "",
@@ -298,6 +300,8 @@ fn report_brief_states_the_hint_rung() {
 fn report_prompt_names_the_practice_level() {
     let base = ReportPromptInput {
         problem: get_problem(Some("two-sum")),
+        interview_mode: InterviewMode::Coding,
+        board_attached: false,
         transcript: "",
         rolling_assessment: "",
         final_code: "",
@@ -400,6 +404,8 @@ fn live_instructions_pose_the_variant_and_hold_no_source_or_walkthrough() {
     // the notes from both places cannot pass as keeping them private.
     let report = report_prompt(ReportPromptInput {
         problem: three_sum,
+        interview_mode: InterviewMode::Coding,
+        board_attached: false,
         transcript: "",
         rolling_assessment: "",
         final_code: "",
@@ -1149,7 +1155,7 @@ fn interview_contract_versions_are_one_closed_bundle() {
 
     assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 27);
     assert_eq!(LIVE_PROMPT_VERSION, 19);
-    assert_eq!(REPORT_PROMPT_VERSION, 15);
+    assert_eq!(REPORT_PROMPT_VERSION, 16);
     assert_eq!(RUBRIC_VERSION, 1);
     assert_eq!(REPORT_SCHEMA_VERSION, 2);
     assert_eq!(
@@ -1157,7 +1163,7 @@ fn interview_contract_versions_are_one_closed_bundle() {
         json!({
             "bundleVersion": 27,
             "livePromptVersion": 19,
-            "reportPromptVersion": 15,
+            "reportPromptVersion": 16,
             "rubricVersion": 1,
             "reportSchemaVersion": 2,
         })

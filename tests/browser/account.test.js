@@ -193,7 +193,7 @@ test("the lobby offers an editor or a whiteboard and carries the choice into the
   );
   assertIncludesCompact(
     interview,
-    'JSON.stringify({ problemId: problem.page, durationMin, interviewId, interviewLoop, interviewMode: whiteboard ? "whiteboard" : "coding", interviewProfile, ...(interviewGrounding',
+    "JSON.stringify({ problemId: problem.page, durationMin, interviewId, interviewLoop, interviewMode: mode, interviewProfile, ...(interviewGrounding",
   );
   assertIncludesCompact(interview, "interviewLoop, report: state.report");
 });

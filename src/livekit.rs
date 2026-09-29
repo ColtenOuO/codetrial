@@ -2911,10 +2911,15 @@ async fn handle_data_packet(
     if let Err(error) = close_turns(room, context).await {
         eprintln!("closing the last turns failed ({error}); writing the report anyway");
     }
+
+    // Copied out rather than borrowed: the farewell below holds the context,
+    // board and all, for as long as the report call runs beside it.
+    let board = context.board.latest().map(<[u8]>::to_vec);
     let prompt = freeze_report_prompt(
         interview.boot,
         context.state,
         interview.started_at.elapsed().as_secs_f64() / 60.0,
+        board.is_some(),
     );
     let api_key = &**interview.keys;
     let farewell = async {
@@ -2937,7 +2942,7 @@ async fn handle_data_packet(
         }
     };
     let (generated, ()) = tokio::join!(
-        generate_report_bounded(interview.boot, &prompt, api_key),
+        generate_report_bounded(interview.boot, &prompt, board.as_deref(), api_key),
         farewell
     );
     publish_report(

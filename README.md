@@ -39,7 +39,10 @@ and the same six steps and swaps the editor and the test runner for a board.
 Nothing runs: the candidate draws their examples and traces one by hand. The
 board is exported as an image a moment after each stroke settles and reaches
 the interviewer over its own byte stream on the same data channel, and
-`read_board` puts the latest one back in front of it on request.
+`read_board` puts the latest one back in front of it on request. The final
+board is attached to the report request, so the reviewer grades the drawing
+rather than an empty editor, and the recording keeps the drawing as the
+strokes that made it, which is what lets the replay redraw any moment of it.
 
 Audio and code snapshots stay in memory unless [recording](#recording) is
 enabled, which is off by default. Candidate video reaches Gemini only with

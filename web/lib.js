@@ -551,45 +551,116 @@ export const frameworkPhases = Object.values(FRAMEWORKS).flatMap((framework) =>
   framework.steps.map((step) => step.label),
 );
 
-/// The two closed enums the server owns (InterviewMode::parse and
-/// InterviewLoop::parse in src/agent.rs). Anything else is the default, which is
-/// what makes a legacy or hostile value safe rather than an error. Stated once
-/// here because seven modules were each restating the same ternary.
-
 /// The steps of one round, each marked done or not.
 ///
 /// Anything the interviewer sends that is not a known id is dropped rather than
 /// rendered: the packet is untrusted like every other, and an unknown phase is
 /// either a version skew or someone else's idea of a step.
-export function frameworkChecklist(round, phases) {
+export function frameworkChecklist(round, phases, mode) {
   const framework = FRAMEWORKS[round] || FRAMEWORKS.coding;
   const done = new Set(
     Array.isArray(phases)
       ? phases.filter((phase) => typeof phase === "string")
       : [],
   );
+  const board = round === "coding" && modeIsWhiteboard(mode);
   return {
-    name: framework.name,
+    name: board ? "Whiteboard" : framework.name,
+    scenario: board ? WHITEBOARD_SCENARIO : framework.scenario,
     steps: framework.steps.map((step) => ({
       ...step,
+      ...(board ? WHITEBOARD_STEPS[step.id] : null),
       done: done.has(step.id),
     })),
   };
 }
 
+/// The line the hint card puts under the flow's name at a whiteboard.
+const WHITEBOARD_SCENARIO =
+  "Working a problem at the board: what was asked for at each step of the coding round";
+
+/// What the six coding steps are at a whiteboard.
+///
+/// The ids are untouched, and that is the whole design: a phase id is the
+/// evidence vocabulary, the report's phase names and the rubric's anchors, so
+/// a second set of ids would be a second rubric to calibrate and a second
+/// report shape to migrate. What differs is what the candidate is told the
+/// step is, because step four at a board is a trace of a drawing rather than
+/// an implementation. The report prompt hands its reviewer the same mapping in
+/// words, so the two readings of "Coding" cannot come apart.
+///
+/// Repeat is absent because it is the same step either way.
+const WHITEBOARD_STEPS = {
+  example: {
+    label: "Example",
+    hint: "draw one ordinary case and one edge case",
+  },
+  algorithm: {
+    label: "Approach",
+    hint: "draw the approach and its cost before you trace it",
+  },
+  coding: {
+    label: "Trace",
+    hint: "walk one of your examples through the drawing",
+  },
+  test: {
+    label: "Edge cases",
+    hint: "name what would break it, and what it does on each",
+  },
+  optimizations: {
+    label: "Complexity",
+    hint: "confirm the time and space cost, and name one optimization",
+  },
+};
+
 function legacyReportMode(value) {
   return value === "practice" ? "practice" : "scored";
 }
 
-/// Which surface the interview runs on, from a URL parameter or a saved
-/// report. Anything this build does not recognize is a coding interview, which
-/// is what every report written before whiteboard mode existed is.
+/// The two closed enums the server owns (InterviewMode::parse and
+/// InterviewLoop::parse in src/agent.rs). Anything else is the default, which is
+/// what makes a legacy or hostile value safe rather than an error. Stated once
+/// here because seven modules were each restating the same ternary.
+///
+/// For the mode, the default is the editor interview, which is also what every
+/// report written before whiteboard mode existed was.
 export function interviewMode(value) {
   return value === "whiteboard" ? "whiteboard" : "coding";
 }
 
 export function modeIsWhiteboard(value) {
   return interviewMode(value) === "whiteboard";
+}
+
+/// The drawing, cut into replay events that fit.
+///
+/// One settle can carry a lot of drawing, and one replay event may not exceed
+/// what `MAX_REPLAY_EVENT_BYTES` in `src/recording/replay.rs` allows, so the
+/// operations are split rather than sent as one payload the server would
+/// refuse whole. The budget here is well under that ceiling because the
+/// envelope, the batch separators and the key names are counted there and not
+/// here.
+///
+/// An operation larger than the budget travels alone rather than being dropped
+/// or cut: a stroke is bounded by `MAX_POINTS` at the point it is drawn, so
+/// the only way to reach this is a board from somewhere else, and half a
+/// stroke is a line the candidate never drew.
+export function boardOpBatches(ops, budget = 24 * 1024) {
+  const batches = [];
+  let batch = [];
+  let bytes = 0;
+  for (const op of Array.isArray(ops) ? ops : []) {
+    const size = textEncoder.encode(JSON.stringify(op)).length;
+    if (batch.length && bytes + size > budget) {
+      batches.push(batch);
+      batch = [];
+      bytes = 0;
+    }
+    batch.push(op);
+    bytes += size;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
 }
 
 /// The header a board's byte stream opens with.
@@ -619,6 +690,11 @@ export function modeLabel(value) {
   return legacyReportMode(value) === "practice" ? "Practice" : "Scored";
 }
 
+/// What a report calls the surface it was held on.
+export function surfaceLabel(value) {
+  return modeIsWhiteboard(value) ? "Whiteboard" : "Editor";
+}
+
 export function loopLabel(value) {
   return codingLoop(value) === "coding_only"
     ? "Coding only"
@@ -636,7 +712,7 @@ const textEncoder = new TextEncoder();
 export const ACTIVE_CONTRACT = {
   bundleVersion: 27,
   livePromptVersion: 19,
-  reportPromptVersion: 15,
+  reportPromptVersion: 16,
   reportSchemaVersion: 2,
   rubricVersion: 1,
 };
@@ -915,6 +991,13 @@ export function sanitizeReport(raw) {
   const interviewLoop = codingLoop(raw?.interviewLoop);
   const recordedLoop =
     raw?.interviewLoop === undefined ? undefined : interviewLoop;
+  // Only where the report recorded one, for the reason the loop beside it is:
+  // every report written before whiteboard mode existed was an editor
+  // interview, and saying so on one is a label its own session never carried.
+  const recordedMode =
+    raw?.interviewMode === undefined
+      ? undefined
+      : interviewMode(raw.interviewMode);
   const roundSummary = reportRounds(raw, interviewLoop);
   const bounded = (value, max) => {
     const number = Math.trunc(Number(value));
@@ -1089,6 +1172,7 @@ export function sanitizeReport(raw) {
       interviewContract,
       mode,
       interviewLoop: recordedLoop,
+      interviewMode: recordedMode,
       rounds: roundSummary,
       endReason: endReason(raw?.endReason),
       incomplete: true,
@@ -1112,6 +1196,7 @@ export function sanitizeReport(raw) {
     interviewContract,
     mode,
     interviewLoop: recordedLoop,
+    interviewMode: recordedMode,
     rounds: roundSummary,
     endReason: endReason(raw?.endReason),
     codingScore: score(raw?.codingScore),
@@ -1728,7 +1813,11 @@ export function replayTimeline(events) {
   const opened = new Map(windows.map((span, index) => [span.index, index]));
   const timeline = [];
   for (const [index, event] of rows.entries()) {
-    if (event?.kind === "editor" || event?.kind === "tests") {
+    if (
+      event?.kind === "editor" ||
+      event?.kind === "tests" ||
+      event?.kind === "board"
+    ) {
       moments.push(event);
       timeline.push({ moment: moments.length - 1 });
       continue;
