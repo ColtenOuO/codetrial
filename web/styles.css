@@ -1238,6 +1238,36 @@ table.phase-scores {
   box-shadow: 0 0 0 2px var(--accent);
 }
 
+.board-sizes {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.board-size {
+  display: grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  border: 1px solid var(--hairline);
+  border-radius: 50%;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.board-size span {
+  border-radius: 50%;
+  background: var(--sub);
+}
+
+.board-size[aria-pressed="true"] {
+  border-color: var(--accent);
+}
+
+.board-size[aria-pressed="true"] span {
+  background: var(--accent);
+}
+
 .board-tool {
   border: 1px solid var(--hairline);
   border-radius: 999px;

@@ -445,8 +445,20 @@ async function checkWhiteboardInterview(page, pageErrors) {
   await clear.click();
   if (!(await clear.isDisabled()))
     throw new Error("clearing the board left it non-empty");
-  if (await page.getByRole("button", { name: "Undo" }).isDisabled())
+  // Clicked rather than only seen enabled: an enabled button over a broken
+  // handler is the failure this has to catch.
+  const undo = page.getByRole("button", { name: "Undo" });
+  if (await undo.isDisabled())
     throw new Error("a cleared board could not be restored with Undo");
+  await undo.click();
+  if (await clear.isDisabled())
+    throw new Error("Undo did not restore the cleared board");
+  const redo = page.getByRole("button", { name: "Redo" });
+  if (await redo.isDisabled())
+    throw new Error("an undone clear could not be redone");
+  await redo.click();
+  if (!(await clear.isDisabled()))
+    throw new Error("Redo did not clear the restored board again");
   // The editor is removed rather than hidden, so its absence is what says the
   // page understood which interview it is holding.
   if (await page.locator(".editor-panel").count()) {
@@ -457,7 +469,7 @@ async function checkWhiteboardInterview(page, pageErrors) {
     throw new Error(`the whiteboard interview raised:\n${raised.join("\n")}`);
   }
   console.log(
-    "whiteboard: the board drew, cleared, and opened the media gate behind it",
+    "whiteboard: the board drew, cleared, undid and redid the clear, and opened the media gate behind it",
   );
 }
 

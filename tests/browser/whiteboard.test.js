@@ -11,15 +11,15 @@ import {
   BOARD_HEIGHT,
   BOARD_WIDTH,
   ERASER_WIDTH,
+  ERASER_WIDTHS,
   MAX_POINTS,
+  MAX_STROKE_WIDTH,
   MAX_STROKES,
   PEN_COLORS,
   PEN_WIDTH,
   boardPoint,
   createBoard,
   drawBoard,
-  strokeColor,
-  strokeWidth,
 } from "../../web/whiteboard.js";
 
 const BLACK = PEN_COLORS[0];
@@ -62,11 +62,27 @@ test("a stroke is kept as the points it was drawn from", () => {
   assert.equal(board.isDrawing(), false);
 });
 
-test("the strokes a caller is handed are a copy of the board", () => {
+test("the strokes a caller is handed cannot move the board", () => {
   const board = createBoard();
   stroke(board, 1, 1, 2, 2);
   board.strokes().push({ color: BLACK, width: PEN_WIDTH, points: [0, 0] });
   assert.equal(board.strokeCount(), 1);
+
+  // The strokes in the list are the board's own, frozen rather than copied,
+  // so a point changed through them throws instead of redrawing the board
+  // behind the history's back.
+  const [first] = board.strokes();
+  assert.throws(() => {
+    first.points[0] = 999;
+  }, TypeError);
+  assert.throws(() => {
+    first.color = "#ffffff";
+  }, TypeError);
+  assert.deepEqual(board.strokes()[0], {
+    color: BLACK,
+    width: PEN_WIDTH,
+    points: [1, 1, 2, 2],
+  });
 });
 
 test("points outside the board are clamped onto it", () => {
@@ -92,11 +108,6 @@ test("a point the pointer repeated is not a point", () => {
 });
 
 test("the eraser paints the background so an erasure is a stroke like any other", () => {
-  assert.equal(strokeColor("eraser", BLACK), BOARD_BACKGROUND);
-  assert.equal(strokeColor("pen", BLACK), BLACK);
-  assert.equal(strokeWidth("eraser"), ERASER_WIDTH);
-  assert.equal(strokeWidth("pen"), PEN_WIDTH);
-
   const board = createBoard();
   stroke(board, 0, 0, 10, 10);
   stroke(board, 0, 0, 10, 10, "eraser");
@@ -115,6 +126,41 @@ test("the eraser paints the background so an erasure is a stroke like any other"
   assert.deepEqual(
     board.strokes().map((item) => item.color),
     [BLACK],
+  );
+});
+
+test("the eraser draws at the size picked, and only at an offered size", () => {
+  const largest = Math.max(...ERASER_WIDTHS);
+  assert.ok(ERASER_WIDTHS.includes(ERASER_WIDTH));
+  assert.equal(MAX_STROKE_WIDTH, largest);
+
+  const board = createBoard();
+  for (const width of ERASER_WIDTHS) {
+    board.begin("eraser", BLACK, 0, 0, width);
+    board.end();
+  }
+  // The pen ignores the eraser's size, and a size no button offers falls back
+  // to the default rather than reaching the board.
+  board.begin("pen", BLACK, 0, 0, largest);
+  board.end();
+  board.begin("eraser", BLACK, 0, 0, 37);
+  board.end();
+  board.begin("eraser", BLACK, 0, 0, largest);
+  board.extend(10, 10);
+  board.end();
+  board.begin("eraser", BLACK, 0, 0, 999);
+  board.end();
+  assert.deepEqual(
+    board.strokes().map((item) => item.width),
+    [...ERASER_WIDTHS, PEN_WIDTH, ERASER_WIDTH, largest, ERASER_WIDTH],
+  );
+
+  // And the journal carries the size, so a replay rebuilds the same erasure.
+  const replayed = createBoard();
+  for (const op of board.takeOps()) assert.equal(applyOp(replayed, op), true);
+  assert.deepEqual(
+    replayed.strokes().map((item) => item.width),
+    [...ERASER_WIDTHS, PEN_WIDTH, ERASER_WIDTH, largest, ERASER_WIDTH],
   );
 });
 
@@ -173,6 +219,33 @@ test("a clear is undone in one piece", () => {
     false,
     "an empty board has nothing to clear",
   );
+});
+
+test("a clear stays redoable under the strokes undone from beneath it", () => {
+  const board = createBoard();
+  stroke(board, 0, 0, 1, 1);
+  stroke(board, 2, 2, 3, 3);
+  board.clear();
+  board.undo();
+  board.undo();
+  assert.equal(board.strokeCount(), 1);
+
+  // Forward again: the stroke, then the clear it sat under. A flag for the
+  // clear was reset by the second undo, and the cleared board could not be
+  // reached by redo at all.
+  assert.equal(board.redo(), true);
+  assert.equal(board.strokeCount(), 2);
+  assert.equal(board.canRedo(), true);
+  assert.equal(board.redo(), true);
+  assert.equal(board.strokeCount(), 0);
+  assert.equal(board.canRedo(), false);
+
+  // And the journal says the same, so a replay lands on the same board.
+  const replayed = createBoard();
+  for (const op of board.takeOps()) applyOp(replayed, op);
+  assert.equal(replayed.strokeCount(), 0);
+  assert.equal(replayed.undo(), true);
+  assert.equal(replayed.strokeCount(), 2);
 });
 
 test("an edit in the middle of a stroke is refused", () => {
@@ -319,7 +392,7 @@ test("a stroke from a recording is checked before it is drawn", () => {
     ["#101418", 3, []],
     ["#101418", 3, "0,0,10,10"],
     ["#101418", Number.POSITIVE_INFINITY, points],
-    ["#101418", ERASER_WIDTH + 1, points],
+    ["#101418", MAX_STROKE_WIDTH + 1, points],
     ["#101418", 3, new Array(MAX_POINTS * 2 + 2).fill(1)],
   ]) {
     assert.equal(

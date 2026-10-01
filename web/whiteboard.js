@@ -45,9 +45,17 @@ export const MAX_POINTS = 1200;
 export const PEN_COLORS = ["#101418", "#c2261b", "#1b64c2", "#1f8a4c"];
 
 export const PEN_WIDTH = 3;
-/// The eraser is wide enough to be usable with a mouse and narrow enough to
-/// take out one line of writing without the one under it.
+/// The eraser sizes the toolbar offers, in board pixels.
+///
+/// A short list rather than a slider: the small one takes out a character
+/// inside a word, the middle one a line of writing without the one under it,
+/// and the large one a whole region without a dozen passes. A continuous range
+/// would put a width on the replay that no button can reproduce.
+export const ERASER_WIDTHS = [12, 24, 56];
+/// The size the eraser starts at.
 export const ERASER_WIDTH = 24;
+/// The widest stroke a board accepts from somewhere else.
+export const MAX_STROKE_WIDTH = Math.max(PEN_WIDTH, ...ERASER_WIDTHS);
 
 /// The eraser paints the background colour instead of removing strokes.
 ///
@@ -57,12 +65,15 @@ export const ERASER_WIDTH = 24;
 /// other, and on an opaque board it is indistinguishable from the real thing.
 /// The alternative, compositing with `destination-out`, punches holes that are
 /// transparent and so come out black in the JPEG.
-export function strokeColor(tool, color) {
+function strokeColor(tool, color) {
   return tool === "eraser" ? BOARD_BACKGROUND : color;
 }
 
-export function strokeWidth(tool) {
-  return tool === "eraser" ? ERASER_WIDTH : PEN_WIDTH;
+/// A size that is not one of the offered ones falls back to the default rather
+/// than being drawn, so the board only ever holds widths a button can make.
+function strokeWidth(tool, eraserWidth = ERASER_WIDTH) {
+  if (tool !== "eraser") return PEN_WIDTH;
+  return ERASER_WIDTHS.includes(eraserWidth) ? eraserWidth : ERASER_WIDTH;
 }
 
 /// A coordinate on the board.
@@ -76,20 +87,32 @@ function clamp(value, max) {
   return Math.min(Math.max(Math.round(value), 0), max);
 }
 
+/// What an undone clear leaves on the redo stack, in the place a stroke would.
+const CLEAR = Symbol("clear");
+
+/// A finished stroke, frozen so the board's own copy cannot be changed through
+/// the one `strokes()` hands out.
+function finished(stroke) {
+  Object.freeze(stroke.points);
+  return Object.freeze(stroke);
+}
+
 /// The drawing, and the history over it.
 ///
 /// `strokes` is what the board is; `undone` is what undo has taken off it, in
-/// the order redo puts it back. Any new stroke discards the redo stack, which
-/// is what every editor does and what stops a redo from resurrecting work that
-/// was drawn over.
+/// the order redo puts it back: a stroke, or `CLEAR` for a clear. Any new
+/// stroke discards the redo stack, which is what every editor does and what
+/// stops a redo from resurrecting work that was drawn over.
 export function createBoard() {
   let strokes = [];
   let undone = [];
   // Clear is one edit, even though it removes every stroke. Only the newest
   // clear needs its own snapshot: drawing after it deliberately starts a new
-  // undo branch, just as drawing after an ordinary undo does.
+  // undo branch, just as drawing after an ordinary undo does. Undoing it puts
+  // `CLEAR` on the redo stack rather than setting a flag beside it, so undoing
+  // strokes from under it and redoing them back leaves the clear still there
+  // to redo.
   let cleared = null;
-  let redoClear = false;
   let open = null;
   /// What has been done to the board since somebody last asked.
   ///
@@ -101,23 +124,25 @@ export function createBoard() {
 
   return {
     /// Everything drawn so far, oldest first, including the stroke in
-    /// progress. A copy: a caller that mutated this would move the board
-    /// without the history noticing.
+    /// progress. A copy of the list, and every finished stroke in it frozen,
+    /// rather than a copy of every stroke: this is called on every repaint,
+    /// and copying each point of a full board per frame is what freezing them
+    /// once avoids. Either way a caller cannot move the board without the
+    /// history noticing.
     strokes: () => strokes.slice(),
     strokeCount: () => strokes.length,
     canUndo: () => strokes.length > 0 || cleared !== null,
-    canRedo: () => undone.length > 0 || redoClear,
+    canRedo: () => undone.length > 0,
     isDrawing: () => open !== null,
 
     /// Starts a stroke, and returns whether the board took it.
-    begin(tool, color, x, y) {
+    begin(tool, color, x, y, eraserWidth = ERASER_WIDTH) {
       if (strokes.length >= MAX_STROKES) return false;
       undone = [];
       cleared = null;
-      redoClear = false;
       open = {
         color: strokeColor(tool, color),
-        width: strokeWidth(tool),
+        width: strokeWidth(tool, eraserWidth),
         points: [clamp(x, BOARD_WIDTH), clamp(y, BOARD_HEIGHT)],
       };
       strokes.push(open);
@@ -150,6 +175,7 @@ export function createBoard() {
         width: open.width,
         points: open.points.slice(),
       });
+      finished(open);
       open = null;
       return true;
     },
@@ -165,7 +191,7 @@ export function createBoard() {
       if (strokes.length >= MAX_STROKES) return false;
       if (typeof color !== "string" || !/^#[0-9a-f]{6}$/i.test(color))
         return false;
-      if (!Number.isFinite(width) || width <= 0 || width > ERASER_WIDTH)
+      if (!Number.isFinite(width) || width <= 0 || width > MAX_STROKE_WIDTH)
         return false;
       if (
         !Array.isArray(points) ||
@@ -177,14 +203,15 @@ export function createBoard() {
       if (!points.every((value) => Number.isFinite(value))) return false;
       undone = [];
       cleared = null;
-      redoClear = false;
-      strokes.push({
-        color,
-        width,
-        points: points.map((value, index) =>
-          clamp(value, index % 2 === 0 ? BOARD_WIDTH : BOARD_HEIGHT),
-        ),
-      });
+      strokes.push(
+        finished({
+          color,
+          width,
+          points: points.map((value, index) =>
+            clamp(value, index % 2 === 0 ? BOARD_WIDTH : BOARD_HEIGHT),
+          ),
+        }),
+      );
       return true;
     },
 
@@ -193,30 +220,26 @@ export function createBoard() {
       if (cleared !== null) {
         strokes = cleared;
         cleared = null;
-        redoClear = true;
+        undone.push(CLEAR);
         journal.push({ op: "undo" });
         return true;
       }
       if (strokes.length === 0) return false;
-      redoClear = false;
       undone.push(strokes.pop());
       journal.push({ op: "undo" });
       return true;
     },
 
     redo() {
-      if (open) return false;
-      if (redoClear) {
+      if (open || undone.length === 0) return false;
+      const next = undone.pop();
+      if (next === CLEAR) {
         cleared = strokes;
         strokes = [];
-        undone = [];
-        redoClear = false;
-        journal.push({ op: "redo" });
-        return true;
+      } else {
+        cleared = null;
+        strokes.push(next);
       }
-      if (undone.length === 0) return false;
-      cleared = null;
-      strokes.push(undone.pop());
       journal.push({ op: "redo" });
       return true;
     },
@@ -229,7 +252,6 @@ export function createBoard() {
       cleared = strokes;
       strokes = [];
       undone = [];
-      redoClear = false;
       journal.push({ op: "clear" });
       return true;
     },
@@ -295,7 +317,7 @@ export function drawBoard(
 /// because a path with one point paints nothing at all in a canvas: the click
 /// that made it would simply vanish, on the board and in the image the
 /// interviewer is sent.
-export function drawStroke(context, stroke) {
+function drawStroke(context, stroke) {
   const points = stroke.points;
   context.strokeStyle = stroke.color;
   context.fillStyle = stroke.color;

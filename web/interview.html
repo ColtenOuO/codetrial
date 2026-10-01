@@ -263,6 +263,15 @@
           >
             Eraser
           </button>
+          <!-- Filled from ERASER_WIDTHS like the pens are from PEN_COLORS.
+               Picking a size picks the eraser too: nobody sizes an eraser they
+               are not about to use. -->
+          <div
+            id="board-eraser-sizes"
+            class="board-sizes"
+            role="group"
+            aria-label="Eraser size"
+          ></div>
           <button id="board-undo" class="board-tool" type="button">Undo</button>
           <button id="board-redo" class="board-tool" type="button">Redo</button>
           <button

@@ -12,6 +12,8 @@ import { prepareLanguage } from "./syntax-parser.js";
 import {
   BOARD_HEIGHT,
   BOARD_WIDTH,
+  ERASER_WIDTH,
+  ERASER_WIDTHS,
   PEN_COLORS,
   boardPoint,
   createBoard,
@@ -256,6 +258,7 @@ const board = {
   context: null,
   color: PEN_COLORS[0],
   tool: "pen",
+  eraserWidth: ERASER_WIDTH,
   settle: null,
   /// One board at a time on the wire, chained the way integrity events are: a
   /// settle that fires while the previous export is still uploading would open
@@ -460,6 +463,7 @@ const nodes = {
   board: document.querySelector("#board"),
   boardPens: document.querySelector("#board-pens"),
   boardEraser: document.querySelector("#board-eraser"),
+  boardEraserSizes: document.querySelector("#board-eraser-sizes"),
   boardUndo: document.querySelector("#board-undo"),
   boardRedo: document.querySelector("#board-redo"),
   boardClear: document.querySelector("#board-clear"),
@@ -2928,6 +2932,31 @@ function initWhiteboard() {
   nodes.boardEraser.addEventListener("click", () =>
     selectTool(board.tool === "eraser" ? "pen" : "eraser"),
   );
+  for (const [index, width] of ERASER_WIDTHS.entries()) {
+    const size = document.createElement("button");
+    size.type = "button";
+    size.className = "board-size";
+    size.dataset.width = String(width);
+    size.setAttribute(
+      "aria-label",
+      `${["Small", "Medium", "Large"][index] ?? width} eraser`,
+    );
+    size.title = size.getAttribute("aria-label");
+    // The dot grows with the square root of the width, so the large size
+    // still fits the toolbar and the three stay visibly different.
+    const dot = document.createElement("span");
+    const diameter = `${Math.round(Math.sqrt(width) * 2.1)}px`;
+    dot.style.width = diameter;
+    dot.style.height = diameter;
+    size.append(dot);
+    size.addEventListener("click", () => selectEraserWidth(width));
+    nodes.boardEraserSizes.append(size);
+  }
+  // The eraser cursor is drawn at the size it erases, which depends on how
+  // wide the panel is laying the board out.
+  nodes.board.addEventListener("pointerenter", paintBoardCursor);
+  window.addEventListener("resize", paintBoardCursor);
+  paintToolState();
   nodes.boardUndo.addEventListener("click", () =>
     applyBoardEdit(board.model.undo()),
   );
@@ -2953,7 +2982,16 @@ function bindBoardPointer() {
   nodes.board.addEventListener("pointerdown", (event) => {
     if (event.pointerType !== "mouse" || event.button !== 0) return;
     const point = boardPoint(nodes.board, event);
-    if (!board.model.begin(board.tool, board.color, point.x, point.y)) return;
+    if (
+      !board.model.begin(
+        board.tool,
+        board.color,
+        point.x,
+        point.y,
+        board.eraserWidth,
+      )
+    )
+      return;
     nodes.board.setPointerCapture(event.pointerId);
     event.preventDefault();
     paintBoard();
@@ -2979,18 +3017,61 @@ function bindBoardPointer() {
 function selectPen(color) {
   board.color = color;
   board.tool = "pen";
-  for (const swatch of nodes.boardPens.children) {
-    swatch.classList.toggle("selected", swatch.dataset.color === color);
-  }
-  nodes.boardEraser.setAttribute("aria-pressed", "false");
+  paintToolState();
 }
 
 function selectTool(tool) {
   board.tool = tool;
-  nodes.boardEraser.setAttribute(
-    "aria-pressed",
-    tool === "eraser" ? "true" : "false",
+  paintToolState();
+}
+
+function selectEraserWidth(width) {
+  board.eraserWidth = width;
+  board.tool = "eraser";
+  paintToolState();
+}
+
+/// The toolbar and the cursor, from `board` alone, so no selector has to
+/// remember which other controls it un-presses.
+function paintToolState() {
+  const erasing = board.tool === "eraser";
+  for (const swatch of nodes.boardPens.children) {
+    swatch.classList.toggle(
+      "selected",
+      !erasing && swatch.dataset.color === board.color,
+    );
+  }
+  nodes.boardEraser.setAttribute("aria-pressed", String(erasing));
+  for (const size of nodes.boardEraserSizes.children) {
+    size.setAttribute(
+      "aria-pressed",
+      String(erasing && Number(size.dataset.width) === board.eraserWidth),
+    );
+  }
+  paintBoardCursor();
+}
+
+/// A circle the size of what the eraser will take out, in place of the
+/// crosshair, which says nothing about how much a drag is about to remove.
+///
+/// Scaled from board pixels to the canvas's laid-out size. Browsers refuse a
+/// cursor image past 128 pixels, so the large size is capped below that on a
+/// very wide panel; the circle is then a little small, never missing.
+function paintBoardCursor() {
+  if (board.tool !== "eraser") {
+    nodes.board.style.cursor = "";
+    return;
+  }
+  const bounds = nodes.board.getBoundingClientRect();
+  const scale = bounds.width ? bounds.width / BOARD_WIDTH : 1;
+  const diameter = Math.min(
+    120,
+    Math.max(6, Math.round(board.eraserWidth * scale)),
   );
+  const size = diameter + 2;
+  const centre = size / 2;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}"><circle cx="${centre}" cy="${centre}" r="${diameter / 2}" fill="rgba(255,255,255,0.6)" stroke="#555" stroke-width="1"/></svg>`;
+  nodes.board.style.cursor = `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${Math.round(centre)} ${Math.round(centre)}, crosshair`;
 }
 
 /// Repaints after an edit that changed something, and sends the board on.
