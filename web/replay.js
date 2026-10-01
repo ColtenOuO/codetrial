@@ -450,6 +450,15 @@ function showMoment(moments, index) {
 
 /// The report, which is `/api/reports` rather than anything recording owns.
 async function loadReport(interviewId, recordingId) {
+  // The work as the events left it, read before the fetch: the timeline is
+  // live while it is in flight, and a moment picked during it redraws the
+  // panel and moves `latest`, so the card would call an earlier board or an
+  // earlier buffer the final one.
+  const final = {
+    language: latest.language,
+    code: latest.code,
+    board: drawn ? nodes.board.toDataURL("image/jpeg", 0.72) : undefined,
+  };
   const response = await fetch("/api/reports");
   if (selected !== recordingId) return;
   if (!response.ok) {
@@ -477,15 +486,12 @@ async function loadReport(interviewId, recordingId) {
   }
   // `reportMarkup` escapes what it interpolates, which is what makes it safe to
   // hand a payload that came back from a server that stored it verbatim.
+  // The board as well as the code, because the card of a whiteboard interview
+  // would otherwise say the editor was empty.
   nodes.report.innerHTML = reportMarkup({
     report,
     problemTitle: saved.problemTitle || "",
-    language: latest.language,
-    code: latest.code,
-    // The board as the events left it, which is the moment the panel is
-    // showing: this runs straight after the events are rendered, and the card
-    // of a whiteboard interview would otherwise say the editor was empty.
-    board: drawn ? nodes.board.toDataURL("image/jpeg", 0.72) : undefined,
+    ...final,
   });
 }
 

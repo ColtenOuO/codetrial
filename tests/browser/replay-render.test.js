@@ -514,6 +514,31 @@ test("the report card this page renders names no finding either", () => {
       },
     },
     { code: "" },
+    // A whiteboard interview: the board timeline in place of the code block,
+    // and the coding steps under the names the candidate was shown. Replay
+    // keeps no board images, so the timeline says where they are.
+    {
+      interviewMode: "whiteboard",
+      frameworkAssessment: {
+        rubricVersion: 1,
+        phases: frameworkPhases.map((phase) => ({
+          phase,
+          score: 60,
+          weaknessTags: [],
+        })),
+      },
+      frameworkEvidence: [
+        {
+          atMs: 65_000,
+          phase: "coding",
+          source: "board_snapshot",
+          kind: "observed",
+          confidence: 95,
+          summary: "Sxev",
+          frameworkVersion: 1,
+        },
+      ],
+    },
   ];
   const said = new Set();
   const rendered = [];
@@ -592,6 +617,8 @@ test("the report card this page renders names no finding either", () => {
     "source event",
     "(editor was empty)",
     "Practice interview report",
+    "No checkpoint was recorded for this step",
+    "Board images are not saved with the report",
   ]) {
     assert.ok(
       rendered.some((markup) => markup.includes(sentence)),
@@ -630,6 +657,7 @@ test("the report card this page renders names no finding either", () => {
       "0",
       "01:05",
       "1",
+      "1.",
       "10",
       "100",
       "2",
@@ -637,7 +665,11 @@ test("the report card this page renders names no finding either", () => {
       "27",
       "2;",
       "3",
+      "3.",
       "37",
+      "4.",
+      "5.",
+      "6.",
       "60",
       "7",
       "70",
@@ -646,15 +678,18 @@ test("the report card this page renders names no finding either", () => {
       "Action",
       "Algorithm",
       "Approach",
+      "Board",
       "Chain",
       "CodeTrial.",
       "Coding",
       "Committee",
       "Common",
       "Communication",
+      "Complexity",
       "Contract",
       "Done",
       "Download",
+      "Edge",
       "Evidence",
       "Example",
       "FACE_MISSING",
@@ -665,6 +700,7 @@ test("the report card this page renders names no finding either", () => {
       "Held",
       "Hint",
       "INCOMPLETE",
+      "If",
       "Improve",
       "Integrity",
       "Interview",
@@ -691,7 +727,9 @@ test("the report card this page renders names no finding either", () => {
       "Test",
       "They",
       "This",
+      "Trace",
       "What",
+      "Whiteboard",
       "Your",
       "\u00b7",
       "a",
@@ -708,6 +746,9 @@ test("the report card this page renders names no finding either", () => {
       "bar",
       "be",
       "behavioral",
+      "board",
+      "board,",
+      "board_snapshot",
       "bring",
       "bundle",
       "by",
@@ -715,7 +756,9 @@ test("the report card this page renders names no finding either", () => {
       "candidate_speech",
       "cannot",
       "captured)",
+      "cases",
       "chain",
+      "checkpoint",
       "coaching",
       "code",
       "coding",
@@ -743,10 +786,12 @@ test("the report card this page renders names no finding either", () => {
       "hints",
       "hiring",
       "how",
+      "images",
       "impact",
       "interview",
       "interviewer",
       "is",
+      "its",
       "it",
       "kept,",
       "ladder",
@@ -772,11 +817,17 @@ test("the report card this page renders names no finding either", () => {
       "predates",
       "problem",
       "recall.",
+      "recorded",
+      "recorded,",
+      "redraws",
+      "replay",
       "report",
+      "report.",
       "reporting:",
       "review",
       "rounds",
       "rubric",
+      "saved",
       "schema",
       "score.",
       "scored",
@@ -788,6 +839,10 @@ test("the report card this page renders names no finding either", () => {
       "space",
       "space.",
       "started",
+      "step",
+      "step.",
+      "stroke",
+      "stroke.",
       "summary",
       "tests",
       "the",
@@ -806,6 +861,8 @@ test("the report card this page renders names no finding either", () => {
       "weighted",
       "were",
       "will",
+      "with",
+      "work",
       "your",
     ]),
     "a word on the report card is a word somebody chose",
@@ -910,6 +967,19 @@ test("a response window does not replace the final editor with missing history",
   const code = dom.node("replay-code").textContent;
   dom.node("replay-timeline").querySelectorAll("[data-window]")[0].click();
   assert.equal(dom.node("replay-code").textContent, code);
+});
+
+// A candidate who never drew sends no strokes, and the page used to read that
+// as an editor interview. The producer opens a whiteboard replay with an empty
+// board event for this, and that alone is enough to choose the board.
+test("an untouched whiteboard still replays as a board", () => {
+  dom.node("replay-timeline").replaceChildren();
+  render([
+    stage(BASE, 0),
+    { kind: "board", at: BASE + 500, payload: { ops: [] } },
+  ]);
+  assert.equal(dom.node("replay-board").hidden, false);
+  assert.equal(dom.node("replay-code").hidden, true);
 });
 
 test("a whiteboard recording replays the drawing, not an empty code panel", () => {

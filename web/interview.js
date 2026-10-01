@@ -275,6 +275,16 @@ const board = {
   /// A phase can complete while a pointer is still down. Its checkpoint waits
   /// for pointerup so the JPEG and replay operations describe the same stroke.
   pendingCheckpoints: [],
+  /// The board as each phase left it, for the candidate's own report card.
+  /// Kept as the data URL the card shows rather than as the JPEG that was
+  /// sent, and never saved: six of them are most of what an account report
+  /// may weigh, and the recording is where a board is kept.
+  snapshots: new Map(),
+  /// Checkpoint images that could not go out because the room was down, by
+  /// phase. Kept rather than dropped like an ordinary board: a checkpoint is
+  /// the board as one phase left it, and the candidate may have cleared that
+  /// drawing since, so nothing sent after the reconnect can stand in for it.
+  heldCheckpoints: new Map(),
 };
 let behavioralMinutes =
   interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
@@ -1164,8 +1174,16 @@ async function connect(preflight, presenting = false) {
       // title for the whole interview.
       recordStage();
       // The starter code, once, so a candidate who never types is not recorded
-      // beside an empty editor.
-      recordReplay("editor", { code: currentCode(), language: state.language });
+      // beside an empty editor. At a whiteboard the empty board instead: there
+      // is no editor to record, and the replay and the recording both switch
+      // to the board on its first event, so a candidate who never drew is
+      // still shown the surface they had rather than a blank code panel.
+      if (whiteboard) recordReplay("board", { ops: [] });
+      else
+        recordReplay("editor", {
+          code: currentCode(),
+          language: state.language,
+        });
     }
   } catch (error) {
     // Swallowed for the candidate, logged for everyone else. Offline practice
@@ -1253,6 +1271,7 @@ async function connectLiveKit(connection, preflight, presenting = false) {
     // whatever the last queued keystroke said.
     flushPendingPublishes();
     publishCode();
+    republishBoard();
     updateAgentState();
   });
   room.on(livekit.RoomEvent.Disconnected, () => {
@@ -1931,6 +1950,7 @@ function receiveControl(bytes) {
         nodes.resultsLabel.textContent = "Coding round complete";
         // The round changed, so the checklist and the offer change with it.
         frameworkRound = "behavioral";
+        if (whiteboard) paintBoard();
         renderFrameworkProgress();
         showFrameworkHint();
       }
@@ -2090,6 +2110,7 @@ function applyPause(paused) {
   // behavioral round disables the editor and the runner on purpose, and a
   // pause taken during it used to give both back on the way out.
   nodes.editor.disabled = paused || codingClosed();
+  if (whiteboard) paintBoard();
   updateRunAvailability();
   recordReplay("lifecycle", { state: paused ? "paused" : "resumed" });
   recordStage();
@@ -2630,6 +2651,7 @@ function renderReport() {
     language: state.language,
     code: currentCode(),
     board: finalBoardImage(),
+    boardPhases: [...board.snapshots],
     saveResult: null,
   });
   mountBehavioralReview(nodes.report, state.transcript.values());
@@ -2981,6 +3003,7 @@ function initWhiteboard() {
 function bindBoardPointer() {
   nodes.board.addEventListener("pointerdown", (event) => {
     if (event.pointerType !== "mouse" || event.button !== 0) return;
+    if (boardLocked()) return;
     const point = boardPoint(nodes.board, event);
     if (
       !board.model.begin(
@@ -3087,9 +3110,20 @@ function applyBoardEdit(changed) {
 
 function paintBoard() {
   drawBoard(board.context, board.model.strokes(), BOARD_WIDTH, BOARD_HEIGHT);
-  nodes.boardUndo.disabled = !board.model.canUndo();
-  nodes.boardRedo.disabled = !board.model.canRedo();
-  nodes.boardClear.disabled = board.model.strokeCount() === 0;
+  const locked = boardLocked();
+  nodes.boardUndo.disabled = locked || !board.model.canUndo();
+  nodes.boardRedo.disabled = locked || !board.model.canRedo();
+  nodes.boardClear.disabled = locked || board.model.strokeCount() === 0;
+}
+
+/// Whether the board takes edits: not while paused, and not once the
+/// behavioral round has started, the two moments the editor is disabled for
+/// the same reasons. A paused interview is not collecting evidence, and a
+/// board left live through it sent Jim work drawn while he had been told to
+/// wait. Not `codingClosed`, which is also true before the interview is live,
+/// when drawing to settle in is harmless and nothing is sent.
+function boardLocked() {
+  return state.paused || frameworkRound === "behavioral";
 }
 
 /// Restarts the settle timer. A candidate drawing steadily therefore sends
@@ -3139,6 +3173,7 @@ function checkpointBoard(phase) {
   board.settle = null;
   recordBoardOps(phase);
   queueBoardPublish(phase);
+  board.snapshots.set(phase, boardDataUrl());
 }
 
 /// The board as the candidate left it, for their own report card.
@@ -3149,7 +3184,10 @@ function checkpointBoard(phase) {
 /// data URL is a hundred kilobytes and the saved report has a quota, and the
 /// recording is where a board is kept.
 function finalBoardImage() {
-  if (!whiteboard) return undefined;
+  return whiteboard ? boardDataUrl() : undefined;
+}
+
+function boardDataUrl() {
   try {
     return nodes.board.toDataURL("image/jpeg", BOARD_JPEG_QUALITY);
   } catch (error) {
@@ -3193,21 +3231,49 @@ function queueBoardPublish(checkpoint = "") {
   const image = new Promise((resolve) => {
     nodes.board.toBlob(resolve, "image/jpeg", BOARD_JPEG_QUALITY);
   });
+  chainBoardPublish(image, strokes, checkpoint);
+}
+
+/// Appends one captured board to the upload chain. A checkpoint that does not
+/// make it out is held for the reconnect; see `board.heldCheckpoints`.
+function chainBoardPublish(image, strokes, checkpoint) {
   board.publishing = board.publishing
-    .then(async () => publishBoard(await image, strokes, checkpoint))
+    .then(async () => {
+      const blob = await image;
+      try {
+        if (await publishBoard(blob, strokes, checkpoint)) return;
+      } catch (error) {
+        console.warn("codetrial board_publish_failed", error);
+      }
+      if (checkpoint && blob)
+        board.heldCheckpoints.set(checkpoint, { blob, strokes });
+    })
     .catch((error) => {
       console.warn("codetrial board_publish_failed", error);
     });
 }
 
-/// Sends one already-captured board JPEG over its own byte stream.
+/// After a reconnect: the checkpoints the gap held back, each as it was
+/// captured, then the board as it is now. Without the second, a board that
+/// settled while the room was down reached the interviewer only with the
+/// candidate's next stroke, and one who had stopped drawing never made one.
+function republishBoard() {
+  if (!whiteboard) return;
+  const held = [...board.heldCheckpoints];
+  board.heldCheckpoints.clear();
+  for (const [checkpoint, { blob, strokes }] of held)
+    chainBoardPublish(Promise.resolve(blob), strokes, checkpoint);
+  queueBoardPublish();
+}
+
+/// Sends one already-captured board JPEG over its own byte stream, and says
+/// whether it did.
 ///
-/// Dropped rather than queued while the room is down. A board is the whole
-/// state of the drawing, so the next settle after the reconnect carries
-/// everything this one would have, where the publish queue would deliver a
-/// stale board first.
+/// An ordinary board is dropped rather than queued while the room is down: it
+/// is the whole state of the drawing, so the one `republishBoard` sends after
+/// the reconnect carries everything this one would have.
 async function publishBoard(blob, strokes, checkpoint) {
-  if (!state.room || !state.connected || !blob) return;
+  if (!state.room || !state.connected || !blob) return false;
   const bytes = new Uint8Array(await blob.arrayBuffer());
   board.sequence += 1;
   const writer = await state.room.localParticipant.streamBytes(
@@ -3215,6 +3281,7 @@ async function publishBoard(blob, strokes, checkpoint) {
   );
   await writer.write(bytes);
   await writer.close();
+  return true;
 }
 
 function currentCode() {

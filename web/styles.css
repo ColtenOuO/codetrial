@@ -1526,6 +1526,53 @@ table.phase-scores {
   background: #ffffff;
 }
 
+/* A whiteboard report's steps, two to a row where the card is wide enough:
+   six full-width boards stacked would put the feedback a long scroll below
+   the summary it explains. */
+.board-timeline ol {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  align-items: start;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.board-step {
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: #24241f;
+  padding: 0.75rem;
+}
+
+.board-step p {
+  margin: 0.5rem 0 0;
+  font-size: 0.875rem;
+}
+
+.board-step .board-step-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0 0 0.5rem;
+  color: var(--ink);
+}
+
+.board-step.missing .board-step-head {
+  color: var(--sub);
+}
+
+.board-final {
+  margin: 1rem 0 0;
+}
+
+.board-final figcaption {
+  margin-bottom: 0.5rem;
+  color: var(--ink);
+  font-weight: 600;
+}
+
 /* The board in a replay, where the code would be. Scaled to the panel rather
    than scrollable like the live one: this is a picture of finished work being
    read, not a surface anybody is drawing on. */
