@@ -293,7 +293,9 @@ There is no code editor and no test runner, and nothing they draw will run.",
         snapshot_note:
             "- A board snapshot is an image of the whole board, sent a moment after they stop
   drawing: the state of their thinking, never only what changed since the last.
-  Handwriting and sketches can be hard to read. Read an unclear mark by what
+  Its lines are drawn thicker than on their screen so they stay legible to you:
+  never comment on line weight, and two marks that touch in it may be apart on
+  their screen. Handwriting and sketches can be hard to read. Read an unclear mark by what
   they said while drawing it; if that does not settle it, ask what the box,
   arrow or symbol stands for rather than guessing or naming it for them.",
         read_tool: "`read_board`",
@@ -2395,7 +2397,7 @@ in the transcript and on the board."#;
 fn board_work_block(attached: bool) -> String {
     let board = if attached {
         "THE CANDIDATE'S BOARD:
-The labeled images attached to this message are the whiteboard at the REACTO phases the candidate completed, followed by the final board when it changed afterwards. Read them in order before scoring: a later board can be empty because the candidate cleared it, without erasing the examples, approach, or trace preserved by an earlier checkpoint."
+The labeled images attached to this message are the whiteboard at the REACTO phases the candidate completed, followed by the final board when it changed afterwards. Read them in order before scoring: a later board can be empty because the candidate cleared it, without erasing the examples, approach, or trace preserved by an earlier checkpoint. Every line in these images is drawn thicker than the candidate saw it, so that it stays legible: never judge neatness or line weight from them, and two marks that touch may be apart on the candidate's board."
     } else {
         "THE CANDIDATE'S BOARD:
 (no board reached this review: either the candidate drew nothing or the last image did not arrive. Judge from the transcript and the rolling assessment alone, and say in `summary` that there was no board to read.)"

@@ -12,6 +12,7 @@ import {
   BOARD_WIDTH,
   ERASER_WIDTH,
   ERASER_WIDTHS,
+  EXPORT_WIDEN,
   MAX_POINTS,
   MAX_STROKE_WIDTH,
   MAX_STROKES,
@@ -329,6 +330,41 @@ test("a click with no drag is painted as a dot", () => {
     ["fill"],
     ["restore"],
   ]);
+});
+
+test("the interviewer's image widens the pen and the eraser alike", () => {
+  // The same amount on both, or an erasure that covered a line on screen
+  // leaves its edges showing in the image the interviewer reads.
+  const board = createBoard();
+  stroke(board, 0, 0, 10, 10);
+  stroke(board, 0, 0, 10, 10, "eraser");
+  board.begin("pen", BLACK, 40, 50);
+  board.end();
+  const context = recordingContext();
+  const painted = [];
+  context.stroke = () => painted.push(context.lineWidth);
+  context.fill = () => painted.push(context.lineWidth);
+  drawBoard(context, board.strokes(), BOARD_WIDTH, BOARD_HEIGHT, EXPORT_WIDEN);
+  assert.ok(EXPORT_WIDEN > 0);
+  assert.deepEqual(painted, [
+    PEN_WIDTH + EXPORT_WIDEN,
+    ERASER_WIDTH + EXPORT_WIDEN,
+    PEN_WIDTH + EXPORT_WIDEN,
+  ]);
+  assert.ok(
+    context.calls.some(
+      (call) => call[0] === "arc" && call[3] === (PEN_WIDTH + EXPORT_WIDEN) / 2,
+    ),
+    "a dot is widened with the lines around it",
+  );
+
+  // And the screen is left as the candidate drew it.
+  const screen = recordingContext();
+  const onScreen = [];
+  screen.stroke = () => onScreen.push(screen.lineWidth);
+  screen.fill = () => onScreen.push(screen.lineWidth);
+  drawBoard(screen, board.strokes());
+  assert.deepEqual(onScreen, [PEN_WIDTH, ERASER_WIDTH, PEN_WIDTH]);
 });
 
 test("a pointer is read in board coordinates whatever the canvas is laid out at", () => {

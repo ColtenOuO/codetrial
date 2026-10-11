@@ -18,6 +18,7 @@ import {
   BOARD_WIDTH,
   ERASER_WIDTH,
   ERASER_WIDTHS,
+  EXPORT_WIDEN,
   PEN_COLORS,
   boardPoint,
   createBoard,
@@ -325,6 +326,9 @@ const board = {
   /// nothing sent later can stand in for it. Retried ahead of every later
   /// board; see `retryHeldCheckpoints`.
   heldCheckpoints: new Map(),
+  /// The off-screen canvas the interviewer's image is drawn on; see
+  /// `exportedBoard`.
+  exportCanvas: null,
 };
 let behavioralMinutes =
   interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
@@ -3805,10 +3809,33 @@ function recordBoardOps(checkpoint = "") {
 /// Captures the board and appends its upload to the one stream-at-a-time chain.
 function queueBoardPublish(checkpoint = "") {
   const strokes = board.model.inkCount();
+  const canvas = exportedBoard();
   const image = new Promise((resolve) => {
-    nodes.board.toBlob(resolve, "image/jpeg", BOARD_JPEG_QUALITY);
+    canvas.toBlob(resolve, "image/jpeg", BOARD_JPEG_QUALITY);
   });
   chainBoardPublish(image, strokes, checkpoint);
+}
+
+/// The board redrawn with `EXPORT_WIDEN`, for the interviewer and the report
+/// model only. The candidate's own card keeps the board as they saw it.
+///
+/// One canvas reused rather than one per board: `toBlob` copies the bitmap
+/// when it is called, so redrawing for the next board cannot reach into an
+/// export still encoding.
+function exportedBoard() {
+  if (!board.exportCanvas) {
+    board.exportCanvas = document.createElement("canvas");
+    board.exportCanvas.width = BOARD_WIDTH;
+    board.exportCanvas.height = BOARD_HEIGHT;
+  }
+  drawBoard(
+    board.exportCanvas.getContext("2d"),
+    board.model.strokes(),
+    BOARD_WIDTH,
+    BOARD_HEIGHT,
+    EXPORT_WIDEN,
+  );
+  return board.exportCanvas;
 }
 
 /// Appends one captured board to the upload chain, behind any checkpoint

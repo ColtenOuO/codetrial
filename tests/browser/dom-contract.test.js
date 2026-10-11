@@ -794,6 +794,23 @@ test("a dropped connection is visible and recovers its state", () => {
   );
 });
 
+// Two images of one board. The interviewer's is redrawn widened so it survives
+// being read small; the candidate's card shows what they actually drew.
+test("only the interviewer's board image is widened", () => {
+  const script = interviewSource();
+  const publish = functionBody(script, "queueBoardPublish");
+  assert.match(publish, /exportedBoard\(\)/);
+  assert.doesNotMatch(publish, /nodes\.board\.toBlob/);
+  assert.match(
+    functionBody(script, "exportedBoard"),
+    /drawBoard\([\s\S]*?EXPORT_WIDEN,?\s*\)/,
+  );
+  assert.match(
+    functionBody(script, "boardDataUrl"),
+    /nodes\.board\.toDataURL\(/,
+  );
+});
+
 // The board is locked when the editor is, and for the same two reasons: a
 // paused interview collects no evidence, and the behavioral round retires the
 // coding surface. Left live, a pause sent Jim work drawn while he waited.

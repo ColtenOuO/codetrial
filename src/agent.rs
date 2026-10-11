@@ -171,9 +171,9 @@ pub const THINKING_CHECK_IN_S: u64 = 120;
 pub(crate) const THINKING_RELEASE_COOLDOWN: std::time::Duration =
     std::time::Duration::from_secs(10);
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 31;
-pub const LIVE_PROMPT_VERSION: u32 = 23;
-pub const REPORT_PROMPT_VERSION: u32 = 18;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 32;
+pub const LIVE_PROMPT_VERSION: u32 = 24;
+pub const REPORT_PROMPT_VERSION: u32 = 19;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 2;
 

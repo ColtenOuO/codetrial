@@ -57,6 +57,19 @@ export const ERASER_WIDTH = 24;
 /// The widest stroke a board accepts from somewhere else.
 export const MAX_STROKE_WIDTH = Math.max(PEN_WIDTH, ...ERASER_WIDTHS);
 
+/// Board pixels added to every stroke in the image the interviewer is sent.
+///
+/// The Live socket counts a board at the same 60 tokens however large it is,
+/// so the model reads it at a fraction of this size, and a `PEN_WIDTH` line
+/// shrunk that far turns faint and broken where handwriting is densest. The
+/// screen keeps the thin pen the candidate chose to write with.
+///
+/// Added to the eraser as well, and by the same amount: an erasure is a
+/// background-coloured stroke over the ink, so widening only the pen would let
+/// the edges of an erased line show through in the image while the candidate
+/// sees it gone.
+export const EXPORT_WIDEN = 3;
+
 /// The eraser paints the background colour instead of removing strokes.
 ///
 /// A real eraser would have to decide which strokes it touched and split them,
@@ -357,18 +370,21 @@ export function applyOp(board, op) {
 /// hundred short paths, which a browser does in a frame; the alternative,
 /// painting only what changed, has to answer what "changed" means after an
 /// undo, and answers it with a second copy of the board.
+///
+/// `widen` is zero on screen and `EXPORT_WIDEN` for the interviewer's image.
 export function drawBoard(
   context,
   strokes,
   width = BOARD_WIDTH,
   height = BOARD_HEIGHT,
+  widen = 0,
 ) {
   context.save();
   context.fillStyle = BOARD_BACKGROUND;
   context.fillRect(0, 0, width, height);
   context.lineCap = "round";
   context.lineJoin = "round";
-  for (const stroke of strokes) drawStroke(context, stroke);
+  for (const stroke of strokes) drawStroke(context, stroke, widen);
   context.restore();
 }
 
@@ -378,14 +394,15 @@ export function drawBoard(
 /// because a path with one point paints nothing at all in a canvas: the click
 /// that made it would simply vanish, on the board and in the image the
 /// interviewer is sent.
-function drawStroke(context, stroke) {
+function drawStroke(context, stroke, widen) {
   const points = stroke.points;
+  const width = stroke.width + widen;
   context.strokeStyle = stroke.color;
   context.fillStyle = stroke.color;
-  context.lineWidth = stroke.width;
+  context.lineWidth = width;
   if (points.length === 2) {
     context.beginPath();
-    context.arc(points[0], points[1], stroke.width / 2, 0, Math.PI * 2);
+    context.arc(points[0], points[1], width / 2, 0, Math.PI * 2);
     context.fill();
     return;
   }
