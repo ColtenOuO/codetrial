@@ -89,3 +89,5 @@ source file to fix; do not edit generated output to silence them.
 - `plan diverges from problem-bank` means an imported id and the study plan
   differ. Mark a course-owned exercise `original` instead of adding it to the
   plan.
+
+<!-- labeler test -->
