@@ -1,0 +1,166 @@
+# Labels a pull request by the paths it changes, read by
+# .github/workflows/labeler.yml. A pull request gets every label one of its
+# files matches, so a change to the judges also carries area/browser when it
+# touches web/. A label listed here is recomputed on every push, so one that no
+# longer matches is removed even if a maintainer added it by hand; labels not
+# listed here (enhancement, help wanted) are never touched.
+#
+# The areas follow the owners in docs/ and the path map the review skill
+# loads its rules from (.claude/skills/codetrial-review/rules/paths), so a
+# label names the contract a reviewer has to read.
+
+# Features: what the change is about.
+
+area/judge:
+  - changed-files:
+      - any-glob-to-any-file:
+          - problem-bank/**
+          - web/judges/**
+          - web/problems/**
+          - web/problem-*.json
+          - web/runners.js
+          - web/compiler-explorer.js
+          - scripts/problem_bank/**
+          - scripts/gen-problems.py
+          - scripts/gen-problem-cards.py
+          - scripts/judge-case-counts.cjs
+          - tests/test_gen_problems.py
+          - docs/adding-a-problem.md
+
+area/interview:
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/agent.rs
+          - src/agent/**
+          - src/gemini.rs
+          - src/gemini/**
+          - src/runtime.rs
+          - src/quote.rs
+          - tests/agent.rs
+          - tests/agent/**
+          # tests/golden/task-posed.json is left out: it hashes every problem
+          # and moves with each judge change, which would mislabel those.
+          - tests/golden/prompts.json
+          - tests/golden/task-prompts.json
+          - tests/golden/report-*.json
+          - tests/golden/gemini-defaults.json
+          - tests/golden/evidence-ledger.json
+          - tests/golden/runtime-helpers.json
+          - tests/golden/timing.json
+          - tests/unit/agent.rs
+          - tests/unit/agent/**
+          - tests/unit/gemini*
+          - tests/unit/gemini*/**
+          - tests/unit/report_*.rs
+          - tests/unit/quote.rs
+          - tests/interview_behavior.rs
+          - tests/interview_behavior/**
+          - tests/runtime.rs
+          - docs/interview-*.md
+          - docs/provider-cost-and-degradation.md
+
+area/room:
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/livekit.rs
+          - src/livekit/**
+          - src/dispatch.rs
+          - src/token.rs
+          - src/web/token.rs
+          - src/peer_audio/**
+          - vendor/**
+          - tests/token.rs
+          - tests/unit/livekit*
+          - tests/unit/livekit*/**
+          - tests/unit/dispatch*.rs
+          - tests/unit/peer_audio/**
+          - docs/livekit-*.md
+
+area/recording:
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/recording/**
+          - src/delivery.rs
+          - src/web/recordings/**
+          - web/recording/**
+          - web/recording-state.js
+          - web/local-recorder.js
+          - web/replay*
+          - tests/recording*.rs
+          - tests/recording/**
+          - tests/unit/delivery.rs
+          - tests/web/recording.rs
+          - docs/recording-contract.md
+
+area/task:
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/tasks/**
+          - src/web/tasks.rs
+          - web/task*
+          - scripts/task-package.py
+          - tests/test_task_*.py
+          - tests/unit/tasks/**
+          - tests/golden/task-preview/**
+
+area/peer:
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/accounts/peer*
+          - src/accounts/peer/**
+          - src/config/peer*
+          - src/launch/**
+          - src/web/peer.rs
+          - src/web/peer/**
+          - web/peer*
+          - tests/peer_config.rs
+          - tests/unit/accounts/peer*
+          - tests/unit/web/peer/**
+          - tests/web/peer*.rs
+
+area/desktop:
+  - changed-files:
+      - any-glob-to-any-file:
+          - desktop/**
+          - scripts/desktop-smoke.sh
+
+# Halves: which side of the data channel the change lands on.
+
+area/browser:
+  - changed-files:
+      - any-glob-to-any-file:
+          - web/**
+          - tests/browser/**
+
+area/server:
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/**
+          - build.rs
+          - Cargo.toml
+          - Cargo.lock
+          - tests/**/*.rs
+
+# Everything around the product.
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - docs/**
+          - '*.md'
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/**
+
+tooling:
+  - changed-files:
+      - any-glob-to-any-file:
+          - scripts/**
+          - .claude/**
+          - tests/test_*.py
+          - tests/support.py
+          - tests/stubs/**
+          - tests/harness/**
+          - Makefile
