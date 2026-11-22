@@ -27,7 +27,7 @@ jobs:
   label:
     # Only trusted main code may write to the repository, and a fork's
     # schedule has nothing to label.
-    if: github.repository == 'sysprog21/codetrial' && github.ref == 'refs/heads/main'
+    if: github.repository == 'ColtenOuO/codetrial' && github.ref == 'refs/heads/ready-label-trial'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
