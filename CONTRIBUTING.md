@@ -425,4 +425,10 @@ branch it only moves the refusal from the push to the pull request.
 
 A review thread carries a correction, a measurement, or nothing: no pasted
 agent walkthroughs, no severity tables, no re-summarizing a diff that GitHub
-already shows. Close an addressed thread with "Resolve conversation".
+already shows. Close an addressed thread with "Resolve conversation". Once
+every reviewer thread is resolved, the pull request is not a draft, merges
+cleanly and its checks are green, it gets the `ready for maintainer review`
+label within about fifteen minutes; that label is what tells a maintainer to
+look again, so resolve a thread only when the change it asked for is pushed.
+A push takes the label off until its checks are green again, and a review left
+with no thread takes it off until your next push answers it.
