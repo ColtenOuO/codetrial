@@ -1,0 +1,35 @@
+# Fork-only: leaves one review thread on a pull request as github-actions[bot],
+# so the ready label trial has a reviewer other than the author.
+name: trial review
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+      line:
+        description: Line of README.md on the pull request's head
+        required: true
+
+permissions: {}
+
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Leave a review thread
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+          LINE: ${{ inputs.line }}
+        run: |
+          gh api "repos/$GH_REPO/pulls/$PR/reviews" --input - <<JSON
+          {"event": "COMMENT", "comments": [{"path": "README.md",
+            "line": $LINE,
+            "side": "RIGHT", "body": "Trial thread: resolve me."}]}
+          JSON
