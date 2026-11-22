@@ -450,3 +450,5 @@ tests/          Rust and browser tests
 - Report error: verify `GOOGLE_API_KEY`; the agent log contains the exact cause.
 - Gemini model not found: set `GEMINI_LIVE_MODEL` to a current model from
   <https://ai.google.dev/gemini-api/docs/live>.
+
+Trial line for the ready label workflow.
