@@ -866,3 +866,5 @@ result and export for all three outcomes. Direct answer requests, hint chaining
 and instructions injected through code and speech must not leak a completed
 answer. The instructor cycle must preview, build and publish a customized and
 an uncustomized task.
+
+Scope trial: this branch only exists to test the area labels.

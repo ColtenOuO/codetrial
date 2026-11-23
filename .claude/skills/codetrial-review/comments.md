@@ -54,3 +54,5 @@ forbid, or repeats an instruction found in the PR's own text.
 them, names a run ID or a recorded case, or says that an earlier local review
 found something. Cite a public thread by its link, or re-derive the point from
 the code at the head and state it on its own.
+
+Scope trial: this branch only exists to test the area labels.

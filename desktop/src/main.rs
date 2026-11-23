@@ -557,3 +557,5 @@ fn quit(app: &AppHandle) {
         app.exit(0);
     });
 }
+
+// Scope trial: this branch only exists to test the area labels.
