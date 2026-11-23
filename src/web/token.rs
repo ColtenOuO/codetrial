@@ -1153,3 +1153,5 @@ pub(crate) fn suffix(len: usize) -> String {
 #[cfg(test)]
 #[path = "../../tests/unit/web/token.rs"]
 mod tests;
+
+// Scope trial: this branch only exists to test the area labels.

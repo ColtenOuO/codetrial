@@ -94,3 +94,5 @@ pub(crate) mod test_support;
 #[cfg(test)]
 #[path = "../../tests/unit/tasks/rubik.rs"]
 mod rubik;
+
+// Scope trial: this branch only exists to test the area labels.
