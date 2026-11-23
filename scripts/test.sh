@@ -950,3 +950,5 @@ write_receipt()
     exit 1
 }
 write_receipt true
+
+# Scope trial: this branch only exists to test the area labels.
