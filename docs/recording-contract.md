@@ -1516,3 +1516,5 @@ saving. Suggestions can remain for 24 hours regardless of these two raw saving
 choices, but do not retain verbatim transcript evidence when text saving was
 not selected. A process restart can lose unselected evidence and must not
 fabricate or regenerate it from another session.
+
+Scope trial: this branch only exists to test the area labels.
