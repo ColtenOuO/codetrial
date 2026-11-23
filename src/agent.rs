@@ -2001,3 +2001,5 @@ pub(crate) fn duration_from_metadata(value: Option<&serde_json::Value>) -> u32 {
 #[cfg(test)]
 #[path = "../tests/unit/agent.rs"]
 mod tests;
+
+// Scope trial: this branch only exists to test the area labels.
