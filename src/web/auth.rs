@@ -1001,3 +1001,5 @@ fn with_peer_flags(state: &AppState, mut session: Value) -> Value {
     );
     session
 }
+
+// Scope trial: this branch only exists to test the area labels.

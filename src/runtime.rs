@@ -190,3 +190,5 @@ pub const TOPIC_TASK_START: &str = "task_start";
 pub const TOPIC_TASK_END: &str = "task_end";
 pub const TOPIC_TASK_THINKING: &str = "task_thinking";
 pub const TOPIC_TASK_ERROR: &str = "task_error";
+
+// Scope trial: this branch only exists to test the area labels.

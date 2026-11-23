@@ -1897,3 +1897,5 @@ mod tests;
 #[cfg(test)]
 #[path = "../tests/unit/livekit/cost.rs"]
 mod cost_tests;
+
+// Scope trial: this branch only exists to test the area labels.
