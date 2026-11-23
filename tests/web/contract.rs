@@ -1293,3 +1293,5 @@ fn browser_interview_duration_matches_the_server_clamp() {
 }
 
 include!("contract_parts/browser_checks_and_long_interview_range.rs");
+
+// Scope trial: this branch only exists to test the area labels.

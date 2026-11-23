@@ -3018,3 +3018,5 @@ function showGroundingError(error) {
     if (parent instanceof HTMLDetailsElement) parent.open = true;
   nodes.groundingError.focus();
 }
+
+// Scope trial: this branch only exists to test the area labels.
